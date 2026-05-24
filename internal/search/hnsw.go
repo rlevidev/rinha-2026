@@ -6,6 +6,39 @@ import (
 )
 
 // =============================================================================
+// Pools - reutilização de estruturas de dados entre requisições
+// =============================================================================
+
+// candidatesPool reutiliza os minHeaps de candidatos entre requisições.
+// Sem o pool, cada KNN5 alocaria um novo slice — com centenas de req/s isso pressiona o GC
+// e causa pausas que afetam diretamente o p99.
+// Capacidade inicial 128: cobre Ef até ~100 sem realocar durante a busca.
+var candidatesPool = sync.Pool{
+	New: func() any {
+		h := make(minHeap, 0, 128)
+		return &h
+	},
+}
+
+// resultsPool reutiliza os maxHeaps de resultados entre requisições, pelo mesmo motivo do candidatesPool.
+// Capacidade inicial 128: mesma justificativa — cobre Ef até ~100 sem realocar.
+var resultsPool = sync.Pool{
+	New: func() any {
+		h := make(maxHeap, 0, 128)
+		return &h
+	},
+}
+
+// O mapa é SEMPRE limpo antes de ser devolvido ao pool (não na entrada).
+// Isso é feito para evitar que o GC tenha que percorrer o mapa inteiro para limpar as referências.
+// O mapa é inicializado com capacidade 256 para evitar alocações desnecessárias.
+var visitedPool = sync.Pool{
+	New: func() any {
+		return make(map[int]struct{}, 256)
+	},
+}
+
+// =============================================================================
 // nodeDist - unidade de dado que circula pelos heaps
 // =============================================================================
 
@@ -181,6 +214,8 @@ func (h *HNSW) vec(id int) []float32 {
 // Sem raiz quadrada: sqrt(a) < sqrt(b) <-> a < b, então a raiz não é necessária para comparar.
 // Economiza ~3M chamadas sqrt por request.
 func distSq(a, b []float32) float32 {
+	a = a[:14:14] // reslice com len e cap fixos em 14: o compilador prova que len(a)==14 e elimina os bounds checks individuais do loop (BCE — Bounds Check Elimination), permitindo vetorização SIMD automática.
+	b = b[:14:14] // mesmo motivo para b.
 	var sum float32
 	for i := range a {
 		diff := a[i] - b[i]
@@ -266,28 +301,16 @@ func (h *HNSW) greedySearch(query []float32, ep, layer int) int {
 //
 // Diferente do greedySearch (que avança para um único melhor vizinho), aqui mantemos uma fila de candidatos e exploramos todos sistematicamente.
 // Isso evita ficar preso em mínimos locais, necessário na camada 0 que é densa.
-func (h *HNSW) searchLayer0(query []float32, ep int, visited map[int]struct{}) []nodeDist {
-	// Reutiliza o mapa limpando-o no lugar (sem realocar).
-	for k := range visited {
-		delete(visited, k)
-	}
-
-	// Inicializa cands (candidatos a explorar) e res (melhores resultados encontrados) com o nó de entrada ep.
-	cands := &minHeap{
-		{
-			ep,
-			distSq(query, h.vec(ep)),
-		},
-	}
+func (h *HNSW) searchLayer0(query []float32, ep int, cands *minHeap, res *maxHeap, visited map[int]struct{}) []nodeDist {
+	// cands, res e visited vêm do sync.Pool: já chegam com len=0 e visited limpo (limpeza feita pelo KNN5 antes de devolver ao pool).
+	// Inicializa cands e res com o nó de entrada ep.
+	epDist := distSq(query, h.vec(ep))
+	*cands = append(*cands, nodeDist{ep, epDist})
 	heap.Init(cands)
-	res := &maxHeap{
-		(*cands)[0],
-	}
+	*res = append(*res, nodeDist{ep, epDist})
 	heap.Init(res)
 
-	// Impede que o ep seja revisitado ao explorar seus vizinhos, evitando loops infinitos e exploração redundante.
-	// Guarda o id "ep" no mapa visited para evitar revisitas.
-	visited[ep] = struct{}{}
+	// ep já foi marcado como visitado pelo caller (KNN5) antes de chamar searchLayer0.
 
 	// Loop até esvaziar a fila de candidatos
 	for cands.Len() > 0 {
@@ -368,15 +391,39 @@ func (h *HNSW) KNN5(query [14]float32) [5]Neighbor {
 	}
 
 	// Fase 2 - beam search na camada 0 (preciso, denso).
-	visited := make(map[int]struct{}, h.Ef*2)
-	cands := h.searchLayer0(q, ep, visited)
+	// Retira cands, res e visited do pool para evitar alocações por requisição.
+	// O pool mantém os slices/mapa já alocados de requisições anteriores — apenas zeramos o len, sem liberar memória.
+	cands := candidatesPool.Get().(*minHeap)
+	res := resultsPool.Get().(*maxHeap)
+	visited := visitedPool.Get().(map[int]struct{})
 
-	// Fase 3 - monta os 5 resultados com o label ("fraud" ou "legit") de fraude de cada vizinho.
+	// Zera o len sem liberar a capacidade alocada: reutiliza a memória da requisição anterior.
+	*cands = (*cands)[:0]
+	*res = (*res)[:0]
+
+	// Marca ep como visitado antes de chamar searchLayer0.
+	// searchLayer0 confia que o caller já fez isso — não limpa o mapa na entrada.
+	visited[ep] = struct{}{}
+
+	neighbors := h.searchLayer0(q, ep, cands, res, visited)
+
+	// Limpa visited e devolve tudo ao pool APÓS extrair os resultados.
+	// A limpeza é feita aqui (não dentro de searchLayer0) para que a responsabilidade
+	// de limpar fique no mesmo lugar que a responsabilidade de devolver ao pool —
+	// evitando que um futuro chamador pegue um mapa com dados antigos.
+	for k := range visited {
+		delete(visited, k)
+	}
+	candidatesPool.Put(cands)
+	resultsPool.Put(res)
+	visitedPool.Put(visited)
+
+	// Fase 3 - monta os 5 resultados com o label de fraude de cada vizinho.
 	var result [5]Neighbor
-	for i := 0; i < 5 && i < len(cands); i++ {
+	for i := 0; i < 5 && i < len(neighbors); i++ {
 		result[i] = Neighbor{
-			DistSq:  cands[i].dist,
-			IsFraud: h.isFraud[cands[i].id],
+			DistSq:  neighbors[i].dist,
+			IsFraud: h.isFraud[neighbors[i].id],
 		}
 	}
 
