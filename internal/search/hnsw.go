@@ -2,6 +2,8 @@ package search
 
 import (
 	"container/heap"
+	"math"
+	"math/rand"
 	"sync"
 )
 
@@ -198,6 +200,57 @@ type HNSW struct {
 	maxLayer   int          // camada mais alta construída, a busca desce de maxLayer até 0
 	numNodes   int          // total de nós inseridos (até 3M)
 	mu         sync.RWMutex // permite múltiplas leituras simultâneas; bloqueia apenas para escrita
+
+	rnd *rand.Rand // gerador aleatório local - isolado por instância, sem contenção de Mutex global
+}
+
+// =============================================================================
+// New - construtor do índice vazio
+// =============================================================================
+
+// New cria um índice HNSW vazio, pronto para receber inserções via Insert().
+//
+// Pré-aloca os slices com a capacidade esperada para evitar realocações durante
+// a inserção de 3M vetores — cada realloc de um slice de 160MB seria catastrófico.
+//
+// capacity: número esperado de nós (ex: 3_000_000)
+// m:        número de vizinhos por camada (ex: 8)
+// efConstruct: candidatos avaliados na inserção (ex: 200)
+// ef:       candidatos avaliados na busca (ex: 50)
+func New(capacity, m, efConstruct, ef int) *HNSW {
+	// Capacidade do adjData — por que usamos a média estatística e não o pior caso?
+	//
+	// Cada nó ocupa em adjData: 2M slots (camada 0) + M*nodeLevel slots (camadas superiores).
+	// O nodeLevel de cada nó é sorteado com distribuição geométrica de parâmetro mL = 1/ln(M).
+	// Portanto, o valor esperado de nodeLevel é mL = 1/ln(M).
+	//
+	// Para M=8: E[nodeLevel] = 1/ln(8) ≈ 0.48
+	// → E[slots por nó] = 2M + M * 0.48 ≈ 2*8 + 8*0.48 ≈ 20 slots
+	// → adjData esperado = 3M nós × 20 slots × 4 bytes ≈ 240 MB ✓
+	//
+	// Usar o pior caso (maxLayerEstimate=6) resultaria em:
+	// → 3M × (2*8 + 8*6) × 4 bytes = 3M × 64 × 4 = 768 MB — viola o limite de 350 MB.
+	//
+	// O Go fará realocações (dobra a capacidade) se ultrapassarmos a pré-alocação,
+	// mas isso só acontece para os poucos nós de camada alta (~5% acima do esperado).
+	// O custo de 1-2 realocações é desprezível comparado a estourar o container.
+	//
+	// Fórmula: 2*M (camada 0 fixa) + M/2 (média das camadas superiores, arredondado para cima)
+	avgSlotsPerNode := 2*m + m/2 // Para M=8: 16 + 4 = 20 slots/nó → ~240 MB total
+
+	return &HNSW{
+		M:           m,
+		EfConstruct: efConstruct,
+		Ef:          ef,
+		vectors:     make([]float32, 0, capacity*14),
+		isFraud:     make([]bool, 0, capacity),
+		adjOffset:   make([]int32, 0, capacity),
+		adjData:     make([]int32, 0, capacity*avgSlotsPerNode),
+		entryPoint:  0,
+		maxLayer:    0,
+		numNodes:    0,
+		rnd:         rand.New(rand.NewSource(1337)), //	seed fixa -> build 100% determinístico e reproduzível
+	}
 }
 
 // =============================================================================
@@ -244,15 +297,14 @@ func (h *HNSW) neighbors(id, layer int) []int32 {
 	// Todos os vizinhos do nó "id" (em todas as camadas, num único slice)
 	all := h.adjData[start:end]
 
-	// Conexões reservadas por camada no slot CSR de cada nó: M (superiores) ou 2M (camada 0).
-	maxPerLayer := h.M
+	var layerStart, layerEnd int
 	if layer == 0 {
-		maxPerLayer = h.M * 2 // camada 0 tem o dobro de conexões
+		layerStart = 0
+		layerEnd = h.M * 2
+	} else {
+		layerStart = 2*h.M + (layer-1)*h.M
+		layerEnd = layerStart + h.M
 	}
-
-	// Calculam o endereçamento de memória para dividir uma estrutura linear (como um array gigante) em segmentos fixos para cada camada (layer) do grafo HNSW
-	layerStart := layer * maxPerLayer    // Calcula o índice inicial (o offset) onde os dados da camada "layer" começam no array global
-	layerEnd := layerStart + maxPerLayer // Calcula o limite superior (o índice onde essa camada termina). Isso define a "janela" de memória que pertence exclusivamente àquela camada.
 
 	// Retorna apenas os vizinhos da camada "layer"
 	if layerStart >= len(all) {
@@ -262,6 +314,100 @@ func (h *HNSW) neighbors(id, layer int) []int32 {
 		layerEnd = len(all)
 	}
 	return all[layerStart:layerEnd]
+}
+
+// =============================================================================
+// randomLevel - sorteia a camada máxima do novo nó
+// =============================================================================
+
+// randomLevel sorteia em qual camada máxima o novo nó vai participar.
+//
+// A distribuição é geométrica: cada nível tem probabilidade p = 1/M de ser promovido
+// ao próximo. Resultado: a maioria dos nós fica só na camada 0, poucos chegam mais alto.
+//
+// A fórmula é do paper original: level = floor(-ln(uniform(0,1)) * mL)
+// onde mL = 1/ln(M) é o fator de normalização.
+func (h *HNSW) randomLevel() int {
+	mL := 1.0 / math.Log(float64(h.M))
+
+	// -ln(uniform) gera uma variável exponencial.
+	level := int(math.Floor(-math.Log(h.rnd.Float64()+1e-10) * mL))
+
+	// Limita ao maxLayerEstimate para não explodir o adjData.
+	const maxLayerEstimate = 6
+	if level > maxLayerEstimate {
+		level = maxLayerEstimate
+	}
+	return level
+}
+
+// =============================================================================
+// setNeighbor / getNeighborSlot - acesso direto ao adjData por (nó, camada, slot)
+// =============================================================================
+
+// neighborSlotOffset retorna o índice em adjData onde começa o slot `slot` do nó `id` na camada `layer`.
+func (h *HNSW) neighborSlotOffset(id, layer, slot int) int32 {
+	nodeBase := int(h.adjOffset[id])
+	var layerOffset int
+	if layer == 0 {
+		layerOffset = slot // slots 0..2M-1
+	} else {
+		layerOffset = 2*h.M + (layer-1)*h.M + slot // 2M fixo da camada0, depois M por camada
+	}
+	return int32(nodeBase + layerOffset)
+}
+
+// setNeighbor escreve o vizinho `neighbor` no slot `slot` do nó `id` na camada `layer`.
+func (h *HNSW) setNeighbor(id, layer, slot, neighbor int) {
+	h.adjData[h.neighborSlotOffset(id, layer, slot)] = int32(neighbor)
+}
+
+// getNeighborCount retorna quantos vizinhos válidos (não -1) o nó `id` tem na camada `layer`.
+func (h *HNSW) getNeighborCount(id, layer int) int {
+	maxSlots := h.M
+	if layer == 0 {
+		maxSlots = h.M * 2
+	}
+	count := 0
+	base := int(h.adjOffset[id])
+	var layerBase int
+	if layer == 0 {
+		layerBase = 0
+	} else {
+		layerBase = 2*h.M + (layer-1)*h.M
+	}
+	for s := 0; s < maxSlots; s++ {
+		if h.adjData[base+layerBase+s] >= 0 {
+			count++
+		}
+	}
+	return count
+}
+
+// =============================================================================
+// pruneConnections - mantém no máximo M vizinhos por nó por camada
+// =============================================================================
+
+// pruneConnections garante que o nó `id` na camada `layer` tenha no máximo `maxConn` vizinhos.
+func (h *HNSW) pruneConnections(id, layer, maxConn int, candidates []nodeDist) {
+	base := int(h.adjOffset[id])
+	var layerBase int
+	if layer == 0 {
+		layerBase = 0
+	} else {
+		layerBase = 2*h.M + (layer-1)*h.M
+	}
+	for s := 0; s < maxConn; s++ {
+		h.adjData[base+layerBase+s] = -1
+	}
+
+	limit := maxConn
+	if len(candidates) < limit {
+		limit = len(candidates)
+	}
+	for s := 0; s < limit; s++ {
+		h.adjData[base+layerBase+s] = int32(candidates[s].id)
+	}
 }
 
 // =============================================================================
@@ -285,15 +431,34 @@ func (h *HNSW) greedySearch(query []float32, ep, layer int) int {
 		// Para cada vizinho do nó atual, calcula a distância até a query
 		// Se encontrar um vizinho mais próximo, atualiza o melhor nó
 		for _, nb := range h.neighbors(best, layer) {
-			if nb < 0 {	// slot não preenchido
+			if nb < 0 { // sentinel: slot não preenchido
 				continue
 			}
 			if d := distSq(query, h.vec(int(nb))); d < bestDist {
 				bestDist, best, improved = d, int(nb), true // bestDist = d, best = nb, improved = true
 			}
 		}
+		if !improved {
+			return best
+		}
+	}
+}
 
-		// Se não encontrou nenhum vizinho melhor, retorna o melhor nó encontrado nessa camada
+// greedySearchInsert é idêntico ao greedySearch, mas filtra sentinels -1 nos vizinhos.
+// Usado exclusivamente durante Insert, onde slots não preenchidos contêm -1.
+func (h *HNSW) greedySearchInsert(query []float32, ep, layer int) int {
+	best := ep
+	bestDist := distSq(query, h.vec(ep))
+	for {
+		improved := false
+		for _, nb := range h.neighbors(best, layer) {
+			if nb < 0 { // sentinel: slot não preenchido
+				continue
+			}
+			if d := distSq(query, h.vec(int(nb))); d < bestDist {
+				bestDist, best, improved = d, int(nb), true
+			}
+		}
 		if !improved {
 			return best
 		}
@@ -331,7 +496,7 @@ func (h *HNSW) searchLayer0(query []float32, ep int, cands *minHeap, res *maxHea
 			// Se o vizinho já foi visitado, pula.
 			// O if está consultando o id "nbID" no mapa "visited" e "seen" é um boolean (true -> encontrado, false -> não encontrado)
 			nbID := int(nb)
-			if nbID < 0 {	// slot não preenchido
+			if nbID < 0 { // slot vazio (sentinel -1)
 				continue
 			}
 			if _, seen := visited[nbID]; seen {
@@ -353,9 +518,52 @@ func (h *HNSW) searchLayer0(query []float32, ep int, cands *minHeap, res *maxHea
 		}
 	}
 
-	// Drena o maxHeap de trás para frente: Pop retorna o mais distante,
-	// preenchendo out[n-1], out[n-2], ..., out[0]. Resultado final: do mais próximo ao mais distante (que é o que o KNN5 espera).
-	// Evita alocar um slice auxiliar para ordenar.
+	out := make([]nodeDist, res.Len())
+	for i := len(out) - 1; i >= 0; i-- {
+		out[i] = heap.Pop(res).(nodeDist)
+	}
+	return out
+}
+
+// searchLayerN - beam search em camadas superiores durante a inserção
+func (h *HNSW) searchLayerN(query []float32, ep, layer, efConstruct int) []nodeDist {
+	visited := make(map[int]struct{}, efConstruct*2)
+	visited[ep] = struct{}{}
+
+	epDist := distSq(query, h.vec(ep))
+	cands := &minHeap{{ep, epDist}}
+	heap.Init(cands)
+	res := &maxHeap{{ep, epDist}}
+	heap.Init(res)
+
+	for cands.Len() > 0 {
+		cur := heap.Pop(cands).(nodeDist)
+
+		if res.Len() >= efConstruct && cur.dist > (*res)[0].dist {
+			break
+		}
+
+		for _, nb := range h.neighbors(cur.id, layer) {
+			nbID := int(nb)
+			if nbID < 0 { // slot vazio (sentinel -1)
+				continue
+			}
+			if _, seen := visited[nbID]; seen {
+				continue
+			}
+			visited[nbID] = struct{}{}
+
+			d := distSq(query, h.vec(nbID))
+			if res.Len() < efConstruct || d < (*res)[0].dist {
+				heap.Push(cands, nodeDist{nbID, d})
+				heap.Push(res, nodeDist{nbID, d})
+				if res.Len() > efConstruct {
+					heap.Pop(res)
+				}
+			}
+		}
+	}
+
 	out := make([]nodeDist, res.Len())
 	for i := len(out) - 1; i >= 0; i-- {
 		out[i] = heap.Pop(res).(nodeDist)
@@ -434,4 +642,116 @@ func (h *HNSW) KNN5(query [14]float32) [5]Neighbor {
 	}
 
 	return result
+}
+
+// =============================================================================
+// Insert - insere um novo vetor no índice
+// =============================================================================
+
+// Insert adiciona um novo vetor ao índice HNSW.
+func (h *HNSW) Insert(vector [14]float32, isFraud bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	newID := h.numNodes
+	nodeLevel := h.randomLevel()
+
+	// --- Registra o vetor e o label ---
+	h.vectors = append(h.vectors, vector[:]...)
+	h.isFraud = append(h.isFraud, isFraud)
+
+	// --- Aloca os slots de adjacência do novo nó em adjData ---
+	slotsNeeded := 2*h.M + h.M*nodeLevel
+	h.adjOffset = append(h.adjOffset, int32(len(h.adjData)))
+	for i := 0; i < slotsNeeded; i++ {
+		h.adjData = append(h.adjData, -1) // -1 = slot vazio
+	}
+
+	h.numNodes++
+
+	// Caso especial: primeiro nó — não há vizinhos para conectar.
+	if newID == 0 {
+		h.entryPoint = 0
+		h.maxLayer = nodeLevel
+		return
+	}
+
+	q := vector[:]
+	ep := h.entryPoint
+
+	// --- Fase 1: descida rápida nas camadas acima de nodeLevel ---
+	for layer := h.maxLayer; layer > nodeLevel; layer-- {
+		ep = h.greedySearchInsert(q, ep, layer)
+	}
+
+	// --- Fase 2: inserção em cada camada de nodeLevel até 0 ---
+	for layer := nodeLevel; layer >= 0; layer-- {
+		maxConn := h.M
+		if layer == 0 {
+			maxConn = h.M * 2
+		}
+
+		// Busca os EfConstruct vizinhos mais próximos nessa camada.
+		candidates := h.searchLayerN(q, ep, layer, h.EfConstruct)
+
+		// Seleciona os maxConn mais próximos como vizinhos do novo nó.
+		limit := maxConn
+		if len(candidates) < limit {
+			limit = len(candidates)
+		}
+		for slot, c := range candidates[:limit] {
+			h.setNeighbor(newID, layer, slot, c.id)
+		}
+
+		// Conecta cada vizinho selecionado de volta ao novo nó (grafo bidirecional).
+		for _, c := range candidates[:limit] {
+			nbID := c.id
+			nbMaxConn := h.M
+			if layer == 0 {
+				nbMaxConn = h.M * 2
+			}
+
+			// Conta quantos vizinhos nb já tem nessa camada.
+			count := h.getNeighborCount(nbID, layer)
+
+			if count < nbMaxConn {
+				// nb ainda tem espaço: adiciona o novo nó no primeiro slot livre.
+				h.setNeighbor(nbID, layer, count, newID)
+			} else {
+				// nb está cheio: avalia se o novo nó é melhor que algum vizinho atual.
+				nbVec := h.vec(nbID)
+				existing := h.neighbors(nbID, layer)
+
+				// Array fixo na stack — nunca escapa para o heap, zero alocações.
+				var poolBuf [17]nodeDist // 2*M_max + 1 = 2*8 + 1; suficiente para M≤8
+				pool := poolBuf[:0]
+				for _, eid := range existing {
+					if eid >= 0 {
+						pool = append(pool, nodeDist{int(eid), distSq(nbVec, h.vec(int(eid)))})
+					}
+				}
+				pool = append(pool, nodeDist{newID, distSq(nbVec, h.vec(newID))})
+
+				// Ordena do mais próximo ao mais distante (insertion sort)
+				for i := 1; i < len(pool); i++ {
+					for j := i; j > 0 && pool[j].dist < pool[j-1].dist; j-- {
+						pool[j], pool[j-1] = pool[j-1], pool[j]
+					}
+				}
+
+				h.pruneConnections(nbID, layer, nbMaxConn, pool)
+			}
+		}
+
+		// O melhor candidato da camada atual vira o ponto de entrada da camada abaixo.
+		if len(candidates) > 0 {
+			ep = candidates[0].id
+		}
+	}
+
+	// --- Fase 3: atualiza entryPoint se o novo nó atingiu uma camada mais alta ---
+	if nodeLevel > h.maxLayer {
+		h.maxLayer = nodeLevel
+		h.entryPoint = newID
+	}
 }
