@@ -285,6 +285,9 @@ func (h *HNSW) greedySearch(query []float32, ep, layer int) int {
 		// Para cada vizinho do nó atual, calcula a distância até a query
 		// Se encontrar um vizinho mais próximo, atualiza o melhor nó
 		for _, nb := range h.neighbors(best, layer) {
+			if nb < 0 {	// slot não preenchido
+				continue
+			}
 			if d := distSq(query, h.vec(int(nb))); d < bestDist {
 				bestDist, best, improved = d, int(nb), true // bestDist = d, best = nb, improved = true
 			}
@@ -328,6 +331,9 @@ func (h *HNSW) searchLayer0(query []float32, ep int, cands *minHeap, res *maxHea
 			// Se o vizinho já foi visitado, pula.
 			// O if está consultando o id "nbID" no mapa "visited" e "seen" é um boolean (true -> encontrado, false -> não encontrado)
 			nbID := int(nb)
+			if nbID < 0 {	// slot não preenchido
+				continue
+			}
 			if _, seen := visited[nbID]; seen {
 				continue
 			}
