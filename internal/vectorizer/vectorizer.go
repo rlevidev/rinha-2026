@@ -1,6 +1,10 @@
 package vectorizer
 
-import "time"
+import (
+	"encoding/json"
+	"os"
+	"time"
+)
 
 // É um "tradutor" que transforma dados brutos (que variam muito em escala) em um formato uniforme e comparável.
 type Normalizer struct {
@@ -136,5 +140,45 @@ func (n *Normalizer) Vectorize(tx *Transaction) [14]float32 {
 	// Risco baseado na média do estabelecimento
 	v[13] = clamp(float32(tx.Merchant.AvgAmount) / n.MaxMerchantAvg)
 
-	return v	// Retorna o vetor pronto para busca
+	return v // Retorna o vetor pronto para busca
+}
+
+// Carrega os parâmetros de normalização e o mapa de risco MCC a partir dos arquivos JSON.
+func LoadNormalizer(normPath, mccPath string) (*Normalizer, error) {
+	var normRaw struct {
+		MaxAmount        float32 `json:"max_amount"`
+		MaxInstallments  float32 `json:"max_installments"`
+		AmountVsAvgRatio float32 `json:"amount_vs_avg_ratio"`
+		MaxMinutes       float32 `json:"max_minutes"`
+		MaxKm            float32 `json:"max_km"`
+		MaxTxCount24h    float32 `json:"max_tx_count_24h"`
+		MaxMerchantAvg   float32 `json:"max_merchant_avg_amount"`
+	}
+	b, err := os.ReadFile(normPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, &normRaw); err != nil {
+		return nil, err
+	}
+
+	var mccRaw map[string]float32
+	b, err = os.ReadFile(mccPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(b, &mccRaw); err != nil {
+		return nil, err
+	}
+
+	return &Normalizer{
+		MaxAmount:        normRaw.MaxAmount,
+		MaxInstallments:  normRaw.MaxInstallments,
+		AmountVsAvgRatio: normRaw.AmountVsAvgRatio,
+		MaxMinutes:       normRaw.MaxMinutes,
+		MaxKm:            normRaw.MaxKm,
+		MaxTxCount24h:    normRaw.MaxTxCount24h,
+		MaxMerchantAvg:   normRaw.MaxMerchantAvg,
+		MccRisk:          mccRaw,
+	}, nil
 }
