@@ -200,8 +200,17 @@ type HNSW struct {
 	maxLayer   int          // camada mais alta construída, a busca desce de maxLayer até 0
 	numNodes   int          // total de nós inseridos (até 3M)
 	mu         sync.RWMutex // permite múltiplas leituras simultâneas; bloqueia apenas para escrita
+	rnd        *rand.Rand   // gerador aleatório local - isolado por instância, sem contenção de Mutex global
 
-	rnd *rand.Rand // gerador aleatório local - isolado por instância, sem contenção de Mutex global
+	// campos necessários para mmap.go compilar corretamente.
+	// readonly: true quando o índice foi carregado via LoadBinaryMmap.
+	//   Impede tentativas acidentais de Insert() num índice mapeado em memória
+	//   read-only (causaria SIGSEGV por escrita em página PROT_READ).
+	// mmapData: slice do mmap retornado por syscall.Mmap.
+	//   Guardado aqui para que Close() possa chamar syscall.Munmap e liberar
+	//   o mapeamento corretamente quando a API desligar.
+	readonly bool
+	mmapData []byte
 }
 
 // =============================================================================
@@ -262,6 +271,8 @@ func New(capacity, m, efConstruct, ef int) *HNSW {
 func (h *HNSW) vec(id int) []float32 {
 	return h.vectors[id*14 : id*14+14]
 }
+
+func (h *HNSW) NumNodes() int { return h.numNodes }
 
 // distSq calcula a distância euclidiana ao quadrado entre dois vetores de 14 dimensões.
 // Sem raiz quadrada: sqrt(a) < sqrt(b) <-> a < b, então a raiz não é necessária para comparar.
