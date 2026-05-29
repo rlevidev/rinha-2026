@@ -1,0 +1,51 @@
+services:
+  lb:
+    image: rlevidev/rinha-2026:latest
+    command: ["/lb"]
+    ports:
+      - "9999:9999"
+    volumes:
+      - sockets:/sockets
+    depends_on:
+      - api1
+      - api2
+    deploy:
+      resources:
+        limits:
+          cpus: "0.10"
+          memory: "20MB"
+
+  api1:
+    image: rlevidev/rinha-2026:latest
+    command: ["/api"]
+    environment:
+      - SOCKET_PATH=/sockets/api1.sock
+      - EF_OVERRIDE=10
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.45"
+          memory: "165MB"
+
+  api2:
+    image: rlevidev/rinha-2026:latest
+    command: ["/api"]
+    environment:
+      - SOCKET_PATH=/sockets/api2.sock
+      - EF_OVERRIDE=10
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.45"
+          memory: "165MB"
+
+volumes:
+  sockets:
+
+networks:
+  default:
+    driver: bridge
