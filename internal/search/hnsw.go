@@ -1,7 +1,6 @@
 package search
 
 import (
-	"container/heap"
 	"math"
 	"math/rand"
 	"sync"
@@ -63,39 +62,69 @@ type nodeDist struct {
 // Ussdo em searchLayer0 para decidir qual nó explorar primeiro
 type minHeap []nodeDist
 
-// Len informa ao pacote container/heap quantos elementos existem
-// Sem isso, heap não consegue calcular posições pai/filho na árvore binária
-func (h minHeap) Len() int {
+// push adiciona um elemento ao heap e sifts upward para manter a invariante.
+func (h *minHeap) push(x nodeDist) {
+	*h = append(*h, x)
+	h.up(len(*h) - 1)
+}
+
+// pop remove e retorna o elemento do topo (o mais próximo).
+func (h *minHeap) pop() nodeDist {
+	old := *h
+	if len(old) == 0 {
+		return nodeDist{}
+	}
+	n := len(old)
+	x := old[0]
+	old[0] = old[n-1]
+	*h = old[:n-1]
+	if len(*h) > 0 {
+		h.down(0)
+	}
+	return x
+}
+
+func (h minHeap) up(i int) {
+	for i > 0 {
+		parent := (i - 1) / 2
+		if h[parent].dist <= h[i].dist {
+			break
+		}
+		h[parent], h[i] = h[i], h[parent]
+		i = parent
+	}
+}
+
+func (h minHeap) down(i int) {
+	n := len(h)
+	for {
+		left := 2*i + 1
+		if left >= n {
+			break
+		}
+		j := left
+		if right := left + 1; right < n && h[right].dist < h[left].dist {
+			j = right
+		}
+		if h[i].dist <= h[j].dist {
+			break
+		}
+		h[i], h[j] = h[j], h[i]
+		i = j
+	}
+}
+
+// peek retorna o elemento do topo sem removê-lo.
+func (h minHeap) peek() nodeDist {
+	if len(h) == 0 {
+		return nodeDist{}
+	}
+	return h[0]
+}
+
+// len retorna o número de elementos no heap.
+func (h minHeap) len() int {
 	return len(h)
-}
-
-// Less define a ordem: distância menor = prioridade maior
-// O heap vai reorganizar os elementos para que o mais próximo fique no topo.
-func (h minHeap) Less(i, j int) bool {
-	return h[i].dist < h[j].dist
-}
-
-// Swap troca dois elementos de posição.
-// Chamado internamento pelo heap durante as operações de reorganização (sift up/down)
-func (h minHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
-
-// Push adiciona um elemento ao final do slice.
-// O heap chama isso e depois reorganiza a árvore (sift up) automaticamente
-// Recebe ponteiro para modificar o slice original, não uma cópia.
-func (h *minHeap) Push(x any) {
-	// Por isso é usado o ponteiro "*", pois ela não pega uma "cópia" do slice, ele pega o slice.
-	*h = append(*h, x.(nodeDist)) // type assertion: x chega como "any" (interface vazia), afirmamos que é nodeDist
-}
-
-// Pop remove e retorna o elemento do topo (o mais próximo)
-// O heap já trocou o topo com o último antes de chamar Pop, então basta encurtar o slice e devolver o elemento removido.
-func (h *minHeap) Pop() any {
-	old := *h             // copia a referencia do slice atual
-	x := old[len(old)-1]  // pega o último elemento (que o heap já colocou aqui)
-	*h = old[:len(old)-1] // encurta o slice, "removendo" o último
-	return x              // retorna o elemento que foi removido
 }
 
 // =============================================================================
@@ -106,29 +135,69 @@ func (h *minHeap) Pop() any {
 // Usado em searchLayer0 para descartar facilmente o pior resultado quando o heap transborda: basta um Pop() para remover o mais distante.
 type maxHeap []nodeDist
 
-func (h maxHeap) Len() int {
-	return len(h)
+// push adiciona um elemento ao heap e sifts upward para manter a invariante.
+func (h *maxHeap) push(x nodeDist) {
+	*h = append(*h, x)
+	h.up(len(*h) - 1)
 }
 
-// Less inverte a ordem em relação ao minHeap: distância maior = topo.
-// Isso é o que transforma o heap num maxHeap.
-func (h maxHeap) Less(i, j int) bool {
-	return h[i].dist > h[j].dist
-}
-
-func (h maxHeap) Swap(i, j int) {
-	h[i], h[j] = h[j], h[i]
-}
-
-func (h *maxHeap) Push(x any) {
-	*h = append(*h, x.(nodeDist))
-}
-
-func (h *maxHeap) Pop() interface{} {
+// pop remove e retorna o elemento do topo.
+func (h *maxHeap) pop() nodeDist {
 	old := *h
-	x := old[len(old)-1]
-	*h = old[:len(old)-1]
+	if len(old) == 0 {
+		return nodeDist{}
+	}
+	n := len(old)
+	x := old[0]
+	old[0] = old[n-1]
+	*h = old[:n-1]
+	if len(*h) > 0 {
+		h.down(0)
+	}
 	return x
+}
+
+func (h maxHeap) up(i int) {
+	for i > 0 {
+		parent := (i - 1) / 2
+		if h[parent].dist >= h[i].dist {
+			break
+		}
+		h[parent], h[i] = h[i], h[parent]
+		i = parent
+	}
+}
+
+func (h maxHeap) down(i int) {
+	n := len(h)
+	for {
+		left := 2*i + 1
+		if left >= n {
+			break
+		}
+		j := left
+		if right := left + 1; right < n && h[right].dist > h[left].dist {
+			j = right
+		}
+		if h[i].dist >= h[j].dist {
+			break
+		}
+		h[i], h[j] = h[j], h[i]
+		i = j
+	}
+}
+
+// peek retorna o elemento do topo sem removê-lo.
+func (h maxHeap) peek() nodeDist {
+	if len(h) == 0 {
+		return nodeDist{}
+	}
+	return h[0]
+}
+
+// len retorna o número de elementos no heap.
+func (h maxHeap) len() int {
+	return len(h)
 }
 
 // =============================================================================
@@ -476,29 +545,21 @@ func (h *HNSW) greedySearchInsert(query []float32, ep, layer int) int {
 	}
 }
 
-// searchLayer0 executa beam search na camada 0 mantendo os Ef melhores candidatos
-//
-// Diferente do greedySearch (que avança para um único melhor vizinho), aqui mantemos uma fila de candidatos e exploramos todos sistematicamente.
-// Isso evita ficar preso em mínimos locais, necessário na camada 0 que é densa.
-func (h *HNSW) searchLayer0(query []float32, ep int, cands *minHeap, res *maxHeap, visited map[int]struct{}) []nodeDist {
-	// cands, res e visited vêm do sync.Pool: já chegam com len=0 e visited limpo (limpeza feita pelo KNN5 antes de devolver ao pool).
+// searchLayer0 executa beam search na camada 0, preenche diretamente result[0:5].
+// Retorna o número de vizinhos encontrados (0-5).
+func (h *HNSW) searchLayer0(query []float32, ep int, cands *minHeap, res *maxHeap, visited map[int]struct{}, result *[5]Neighbor) int {
 	// Inicializa cands e res com o nó de entrada ep.
 	epDist := distSq(query, h.vec(ep))
-	*cands = append(*cands, nodeDist{ep, epDist})
-	heap.Init(cands)
-	*res = append(*res, nodeDist{ep, epDist})
-	heap.Init(res)
-
-	// ep já foi marcado como visitado pelo caller (KNN5) antes de chamar searchLayer0.
+	cands.push(nodeDist{ep, epDist})
+	res.push(nodeDist{ep, epDist})
 
 	// Loop até esvaziar a fila de candidatos
-	for cands.Len() > 0 {
+	for cands.len() > 0 {
 		// Pega o melhor candidato (menor distância) para explorar
-		cur := heap.Pop(cands).(nodeDist)
+		cur := cands.pop()
 
-		// Poda: se o melhor candidato restante já é pior que o pior resultado atual, todos os próximos candidatos também serão piores, podemos parar a busca.
-		// Isso reduz o número de nós explorados significativamente.
-		if res.Len() >= h.Ef && cur.dist > (*res)[0].dist {
+		// Poda: se o melhor candidato restante já é pior que o pior resultado atual, podemos parar.
+		if res.len() >= h.Ef && cur.dist > res.peek().dist {
 			break
 		}
 
@@ -518,39 +579,59 @@ func (h *HNSW) searchLayer0(query []float32, ep int, cands *minHeap, res *maxHea
 			d := distSq(query, h.vec(nbID))
 
 			// Adiciona nbID aos candidatos e resultados só se for promissor
-			// (melhor que o pior resultado atual, ou resultados ainda não estão cheios).
-			if res.Len() < h.Ef || d < (*res)[0].dist {
-				heap.Push(cands, nodeDist{nbID, d})
-				heap.Push(res, nodeDist{nbID, d})
-				if res.Len() > h.Ef {
-					heap.Pop(res)
+			if res.len() < h.Ef || d < res.peek().dist {
+				cands.push(nodeDist{nbID, d})
+				res.push(nodeDist{nbID, d})
+				if res.len() > h.Ef {
+					res.pop()
 				}
 			}
 		}
 	}
 
-	out := make([]nodeDist, res.Len())
-	for i := len(out) - 1; i >= 0; i-- {
-		out[i] = heap.Pop(res).(nodeDist)
+	// Drena res (maxHeap) nos slots do result em ordem crescente de distância.
+	// O maxHeap tem o mais distante no topo; o pop de maxHeap retorna elementos
+	// em ordem decrescente de distância.
+	// Pegamos os top-5 e invertemos a ordem para ficar crescente.
+	n := res.len()
+	if n > 5 {
+		n = 5
 	}
-	return out
+	// Extrai tudo do res num buffer temporário
+	var tmp [128]nodeDist
+	total := 0
+	for res.len() > 0 {
+		tmp[total] = res.pop()
+		total++
+	}
+	// tmp[0..total-1] está em ordem decrescente de distância
+	// Os menores estão no final. Pegamos os últimos `n` em ordem reversa.
+	for i := 0; i < n; i++ {
+		nd := tmp[total-1-i] // menor distância primeiro
+		result[i] = Neighbor{
+			DistSq:  nd.dist,
+			IsFraud: h.isFraud[nd.id],
+		}
+	}
+	return n
 }
 
 // searchLayerN - beam search em camadas superiores durante a inserção
 func (h *HNSW) searchLayerN(query []float32, ep, layer, efConstruct int) []nodeDist {
+	// visited precisa ser isolado: cada chamada de searchLayerN tem seu próprio mapa
 	visited := make(map[int]struct{}, efConstruct*2)
 	visited[ep] = struct{}{}
 
 	epDist := distSq(query, h.vec(ep))
 	cands := &minHeap{{ep, epDist}}
-	heap.Init(cands)
+	cands.up(0)
 	res := &maxHeap{{ep, epDist}}
-	heap.Init(res)
+	res.up(0)
 
-	for cands.Len() > 0 {
-		cur := heap.Pop(cands).(nodeDist)
+	for cands.len() > 0 {
+		cur := cands.pop()
 
-		if res.Len() >= efConstruct && cur.dist > (*res)[0].dist {
+		if res.len() >= efConstruct && cur.dist > res.peek().dist {
 			break
 		}
 
@@ -565,19 +646,21 @@ func (h *HNSW) searchLayerN(query []float32, ep, layer, efConstruct int) []nodeD
 			visited[nbID] = struct{}{}
 
 			d := distSq(query, h.vec(nbID))
-			if res.Len() < efConstruct || d < (*res)[0].dist {
-				heap.Push(cands, nodeDist{nbID, d})
-				heap.Push(res, nodeDist{nbID, d})
-				if res.Len() > efConstruct {
-					heap.Pop(res)
+			if res.len() < efConstruct || d < res.peek().dist {
+				cands.push(nodeDist{nbID, d})
+				res.push(nodeDist{nbID, d})
+				if res.len() > efConstruct {
+					res.pop()
 				}
 			}
 		}
 	}
 
-	out := make([]nodeDist, res.Len())
-	for i := len(out) - 1; i >= 0; i-- {
-		out[i] = heap.Pop(res).(nodeDist)
+	out := make([]nodeDist, res.len())
+	for i := 0; i < len(out); i++ {
+		// pop de maxHeap retorna em ordem decrescente de distância
+		// vamos inverter preenchendo de trás para frente
+		out[len(out)-1-i] = res.pop()
 	}
 	return out
 }
@@ -630,27 +713,17 @@ func (h *HNSW) KNN5(query [14]float32) [5]Neighbor {
 	// searchLayer0 confia que o caller já fez isso — não limpa o mapa na entrada.
 	visited[ep] = struct{}{}
 
-	neighbors := h.searchLayer0(q, ep, cands, res, visited)
+	var result [5]Neighbor
+	h.searchLayer0(q, ep, cands, res, visited, &result)
 
 	// Limpa visited e devolve tudo ao pool APÓS extrair os resultados.
 	// A limpeza é feita aqui (não dentro de searchLayer0) para que a responsabilidade
 	// de limpar fique no mesmo lugar que a responsabilidade de devolver ao pool —
 	// evitando que um futuro chamador pegue um mapa com dados antigos.
-	for k := range visited {
-		delete(visited, k)
-	}
+	clear(visited)
 	candidatesPool.Put(cands)
 	resultsPool.Put(res)
 	visitedPool.Put(visited)
-
-	// Fase 3 - monta os 5 resultados com o label de fraude de cada vizinho.
-	var result [5]Neighbor
-	for i := 0; i < 5 && i < len(neighbors); i++ {
-		result[i] = Neighbor{
-			DistSq:  neighbors[i].dist,
-			IsFraud: h.isFraud[neighbors[i].id],
-		}
-	}
 
 	return result
 }

@@ -1,6 +1,6 @@
 services:
   lb:
-    image: rlevidev/rinha-2026:latest
+    image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/lb"]
     ports:
       - "9999:9999"
@@ -16,11 +16,12 @@ services:
           memory: "20MB"
 
   api1:
-    image: rlevidev/rinha-2026:latest
+    image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/api"]
     environment:
       - SOCKET_PATH=/sockets/api1.sock
       - EF_OVERRIDE=10
+      - GOMAXPROCS=2
     volumes:
       - sockets:/sockets
     deploy:
@@ -30,11 +31,12 @@ services:
           memory: "165MB"
 
   api2:
-    image: rlevidev/rinha-2026:latest
+    image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/api"]
     environment:
       - SOCKET_PATH=/sockets/api2.sock
       - EF_OVERRIDE=10
+      - GOMAXPROCS=2
     volumes:
       - sockets:/sockets
     deploy:

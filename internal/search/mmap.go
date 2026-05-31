@@ -121,7 +121,7 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 
 	// Validação: arquivo deve ter pelo menos o header (56 bytes)
 	if size < 56 {
-		return nil, fmt.Errorf("index file too small: %d bytes (expected >= 56)", size)
+		return nil, fmt.Errorf("index file too small: %d bytes", size)
 	}
 
 	// Mapeia arquivo em memória com leitura compartilhada entre processos
@@ -130,7 +130,7 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 		0,
 		size,
 		syscall.PROT_READ,
-		syscall.MAP_SHARED|syscall.MAP_POPULATE,
+		syscall.MAP_SHARED,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mmap file: %w", err)
@@ -187,7 +187,7 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 	vectorsEnd := offset + vectorsBytes
 	if vectorsEnd > size {
 		syscall.Munmap(data)
-		return nil, fmt.Errorf("vectors exceeds file size: offset %d + %d > %d", offset, vectorsBytes, size)
+		return nil, fmt.Errorf("vectors exceeds file size")
 	}
 	vectorsData := unsafe.Pointer(&data[offset])
 	vectors := unsafe.Slice((*float32)(vectorsData), vectorsSize)
@@ -201,7 +201,7 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 	adjOffsetEnd := adjOffsetStart + adjOffsetBytes
 	if adjOffsetEnd > size {
 		syscall.Munmap(data)
-		return nil, fmt.Errorf("adjOffset exceeds file size: offset %d + %d > %d", adjOffsetStart, adjOffsetBytes, size)
+		return nil, fmt.Errorf("adjOffset exceeds file size")
 	}
 	adjOffsetData := unsafe.Pointer(&data[adjOffsetStart])
 	adjOffset := unsafe.Slice((*int32)(adjOffsetData), adjOffsetSize)
@@ -213,7 +213,7 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 	adjDataEnd := adjDataStart + adjDataBytes
 	if adjDataEnd > size {
 		syscall.Munmap(data)
-		return nil, fmt.Errorf("adjData exceeds file size: offset %d + %d > %d", adjDataStart, adjDataBytes, size)
+		return nil, fmt.Errorf("adjData exceeds file size")
 	}
 	adjDataData := unsafe.Pointer(&data[adjDataStart])
 	adjData := unsafe.Slice((*int32)(adjDataData), adjDataSize)
@@ -222,7 +222,7 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 	isFraudStart := adjDataEnd
 	if isFraudStart+numNodes > size {
 		syscall.Munmap(data)
-		return nil, fmt.Errorf("isFraud exceeds file size: offset %d + %d > %d", isFraudStart, numNodes, size)
+		return nil, fmt.Errorf("isFraud exceeds file size")
 	}
 	isFraudData := unsafe.Pointer(&data[isFraudStart])
 	isFraud := unsafe.Slice((*bool)(isFraudData), numNodes)

@@ -2,9 +2,12 @@ package main
 
 import (
 	"log"
+	"math/rand"
 	"net"
 	"net/http"
 	"os"
+	"runtime"
+	"strconv"
 
 	"github.com/rlevidev/rinha-2026/internal/handler"
 	"github.com/rlevidev/rinha-2026/internal/search"
@@ -12,9 +15,18 @@ import (
 )
 
 func main() {
-	// Carrega índice via mmap MAP_SHARED, compartilhado com a outra instância.
-	// Duas instâncias mapeando o mesmo index.bin compartilham as mesmas páginas
-	// físicas — ~280MB no kernel, ~140MB de RSS por container.
+	// GOMAXPROCS: configura paralelismo para casar com o limite de CPU do container.
+	// Com cpus="0.45", o padrão seria 4 (NumCPU do host), causando context switching.
+	// GOMAXPROCS=2 usa 2 threads OS para 0.45 CPU — equilíbrio entre paralelismo e contenção.
+	// Pode ser sobrescrito via variável de ambiente para experimentação.
+	if gmp := os.Getenv("GOMAXPROCS"); gmp != "" {
+		if n, err := strconv.Atoi(gmp); err == nil && n > 0 {
+			runtime.GOMAXPROCS(n)
+		}
+	} else {
+		runtime.GOMAXPROCS(2)
+	}
+
 	indexPath := "/index.bin"
 	log.Printf("Carregando índice de %s via mmap...", indexPath)
 
@@ -31,6 +43,20 @@ func main() {
 	if err != nil {
 		log.Fatalf("Erro ao carregar normalizer: %v", err)
 	}
+
+	// Warmup: faz 200 buscas com vetores aleatórios antes de sinalizar pronto.
+	// Isso aquece o page cache do kernel para as regiões críticas do índice,
+	// evitando page faults durante o teste real que causariam picos de latência.
+	log.Printf("Aquecendo page cache com 200 buscas dummy...")
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < 200; i++ {
+		var q [14]float32
+		for j := range q {
+			q[j] = rng.Float32()
+		}
+		index.KNN5(q)
+	}
+	log.Printf("Warmup concluído.")
 
 	h := &handler.FraudHandler{
 		Index:      index,
@@ -61,6 +87,6 @@ func main() {
 		log.Fatalf("Erro ao criar arquivo ready: %v", err)
 	}
 
-	log.Printf("API pronta em %s", socketPath)
+	log.Printf("API pronta em %s (GOMAXPROCS=%d)", socketPath, runtime.GOMAXPROCS(0))
 	log.Fatal(http.Serve(ln, h))
 }

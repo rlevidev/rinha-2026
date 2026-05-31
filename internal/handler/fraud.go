@@ -17,7 +17,18 @@ type FraudHandler struct {
 
 // fallback: aprovamos para evitar HTTP 500 (peso 5) ao custo de um FP (peso 1).
 // Declarado como var de pacote para zero alocação — reutilizado em toda falha.
-var fallback = []byte(`{"approved":true,"fraud_score":0.0}`)
+var fallback = []byte(`{"approved":true,"fraud_score":0.0}` + "\n")
+
+// Respostas pré-calculadas para os 6 valores possíveis (0/5 a 5/5).
+// Elimina json.Encode + reflection em todo request.
+var responses = [6][]byte{
+	[]byte(`{"approved":true,"fraud_score":0.0}` + "\n"),
+	[]byte(`{"approved":true,"fraud_score":0.2}` + "\n"),
+	[]byte(`{"approved":true,"fraud_score":0.4}` + "\n"),
+	[]byte(`{"approved":false,"fraud_score":0.6}` + "\n"),
+	[]byte(`{"approved":false,"fraud_score":0.8}` + "\n"),
+	[]byte(`{"approved":false,"fraud_score":1.0}` + "\n"),
+}
 
 func (h *FraudHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
@@ -74,15 +85,7 @@ func (h *FraudHandler) handleFraudScore(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	fraudScore := float32(fraudCount) / 5.0
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(struct { //nolint:errcheck
-		Approved   bool    `json:"approved"`
-		FraudScore float32 `json:"fraud_score"`
-	}{
-		Approved:   fraudScore < 0.6,
-		FraudScore: fraudScore,
-	})
+	w.Write(responses[fraudCount])
 }

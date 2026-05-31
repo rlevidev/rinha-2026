@@ -1,6 +1,7 @@
 package vectorizer
 
 import (
+	"encoding/json"
 	"math"
 	"testing"
 )
@@ -17,13 +18,13 @@ func almostEqual(a, b [14]float32) bool {
 	return true
 }
 
-func TestVectoriz(t *testing.T) {
+func TestVectorize(t *testing.T) {
 	// Valores extraidos de resources/normalization.json
 	n := &Normalizer{
 		MaxAmount:        10000,
 		MaxInstallments:  12.0,
 		AmountVsAvgRatio: 10.0,
-		MaxMinutes: 	  1440.0,
+		MaxMinutes:       1440.0,
 		MaxKm:            1000.0,
 		MaxTxCount24h:    20.0,
 		MaxMerchantAvg:   10000.0,
@@ -35,39 +36,19 @@ func TestVectoriz(t *testing.T) {
 	}
 
 	// Caso de teste baseado no primeiro elemento de resource/example-payloads.json e o primeiro vetor de resource/example-references.json
-	tx := &Transaction{
-		Amount: 41.12,
-		Installments: 2,
-		RequestedAt: "2026-03-11T18:45:53Z",
-		Customer: struct {
-			AvgAmount float32
-			TxCount24h int
-			KnowMerchants []string
-		}{
-			AvgAmount: 83.24,
-			TxCount24h: 3,
-			KnowMerchants: []string{"MERC-003", "MERC-016"},
-		},
-		Terminal: struct {
-			KmFromHome float64
-			IsOnline bool
-			CardPresent bool
-		}{
-			KmFromHome: 29.2331,
-			IsOnline: false,
-			CardPresent: true,
-		},
-		LastTransaction: nil,
-		Merchant: struct {
-			ID string
-			MCC string
-			AvgAmount float64
-		}{
-			ID: "MERC-016",
-			MCC: "5411",
-			AvgAmount: 60.25,
-		},
-	}
+	tx := &Transaction{}
+	tx.Transaction.Amount = 41.12
+	tx.Transaction.Installments = 2
+	tx.Transaction.RequestedAt = "2026-03-11T18:45:53Z"
+	tx.Customer.AvgAmount = 82.24
+	tx.Customer.TxCount24h = 3
+	tx.Customer.KnowMerchants = []string{"MERC-003", "MERC-016"}
+	tx.Terminal.KmFromHome = 29.2331
+	tx.Terminal.IsOnline = false
+	tx.Terminal.CardPresent = true
+	tx.Merchant.ID = "MERC-016"
+	tx.Merchant.MCC = "5411"
+	tx.Merchant.AvgAmount = 60.25
 
 	// Define exatamente qual saída esperada receber.
 	// O vetor foi calculado manualmente para garantir que o teste não falhe por um erro de cálculo.
@@ -87,12 +68,66 @@ func TestVectoriz(t *testing.T) {
 	// 0.15 - risco do MCC
 	// 0.0060 - média do comerciante normalizada
 
-
 	// Chama a função Vectorize() passando a transação de teste. O resultado é armazenado na variável got.
 	got := n.Vectorize(tx)
 
 	// Compara o resultado obtido (got) com o resultado esperado (expected).
 	if !almostEqual(got, expected) {
 		t.Errorf("Vectorize() = %v, want %v", got, expected)
+	}
+}
+
+// TestVectorizeJSONParse verifica que a struct com tags json parseia corretamente.
+func TestVectorizeJSONParse(t *testing.T) {
+	payload := `{
+		"id": "tx-1329056812",
+		"transaction": {
+			"amount": 41.12,
+			"installments": 2,
+			"requested_at": "2026-03-11T18:45:53Z"
+		},
+		"customer": {
+			"avg_amount": 82.24,
+			"tx_count_24h": 3,
+			"known_merchants": ["MERC-003", "MERC-016"]
+		},
+		"merchant": {
+			"id": "MERC-016",
+			"mcc": "5411",
+			"avg_amount": 60.25
+		},
+		"terminal": {
+			"is_online": false,
+			"card_present": true,
+			"km_from_home": 29.2331
+		},
+		"last_transaction": null
+	}`
+
+	var tx Transaction
+	if err := json.Unmarshal([]byte(payload), &tx); err != nil {
+		t.Fatalf("Unmarshal falhou: %v", err)
+	}
+
+	if tx.Transaction.Amount != 41.12 {
+		t.Errorf("amount: got %.2f want 41.12", tx.Transaction.Amount)
+	}
+	if tx.Customer.AvgAmount != 82.24 {
+		t.Errorf("avg_amount: got %.2f want 82.24", tx.Customer.AvgAmount)
+	}
+	if tx.Customer.TxCount24h != 3 {
+		t.Errorf("tx_count_24h: got %d want 3", tx.Customer.TxCount24h)
+	}
+	if len(tx.Customer.KnowMerchants) != 2 {
+		t.Errorf("known_merchants: got %d want 2", len(tx.Customer.KnowMerchants))
+	}
+	if tx.Merchant.MCC != "5411" {
+		t.Errorf("mcc: got %s want 5411", tx.Merchant.MCC)
+	}
+	if !tx.Terminal.CardPresent {
+		t.Errorf("card_present: got false want true")
+	}
+	if tx.LastTransaction != nil {
+		t.Errorf("last_transaction: expected nil, got non-nil")
 	}
 }
