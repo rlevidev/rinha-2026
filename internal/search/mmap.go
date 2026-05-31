@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -15,14 +14,14 @@ import (
 // Formato (em ordem para garantir alinhamento natural):
 //
 //	Offset 0:       Header (7×int64 = 56 bytes)
-//	Offset 56:      vectors (float32 array: numNodes × 14 × 4 bytes)
+//	Offset 56:      vectors (uint16 array: numNodes × 14 × 2 bytes)
 //	Offset 56+V:    adjOffset (int32 array: numNodes × 4 bytes)
 //	Offset 56+V+A:  adjData (int32 array: len(adjData) × 4 bytes)
 //	Offset 56+V+A+D: isFraud (bool array: numNodes × 1 byte)
 //
 // Esta ordem garante:
 //   - Header alinhado em múltiplo de 8 (int64)
-//   - vectors alinhado em múltiplo de 4 (float32)
+//   - vectors alinhado em múltiplo de 2 (uint16)
 //   - adjOffset alinhado em múltiplo de 4 (int32)
 //   - adjData alinhado em múltiplo de 4 (int32)
 //   - isFraud pode começar em qualquer offset (bool = 1 byte)
@@ -130,7 +129,7 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 		0,
 		size,
 		syscall.PROT_READ,
-		syscall.MAP_SHARED,
+		syscall.MAP_SHARED|syscall.MAP_POPULATE,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mmap file: %w", err)
@@ -181,16 +180,16 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 	// Ordem: header (56) -> vectors -> adjOffset -> adjData -> isFraud
 	offset := 56
 
-	// vectors: float32 array (numNodes × 14)
+	// vectors: uint16 array (numNodes × 14)
 	vectorsSize := numNodes * 14
-	vectorsBytes := vectorsSize * 4
+	vectorsBytes := vectorsSize * 2
 	vectorsEnd := offset + vectorsBytes
 	if vectorsEnd > size {
 		syscall.Munmap(data)
 		return nil, fmt.Errorf("vectors exceeds file size")
 	}
 	vectorsData := unsafe.Pointer(&data[offset])
-	vectors := unsafe.Slice((*float32)(vectorsData), vectorsSize)
+	vectors := unsafe.Slice((*uint16)(vectorsData), vectorsSize)
 
 	// adjOffset: int32 array (numNodes)
 	// len(h.adjOffset) == numNodes porque Insert faz um append por nó.
@@ -239,7 +238,6 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 		entryPoint:  int(entryPoint),
 		maxLayer:    int(maxLayer),
 		numNodes:    numNodes,
-		mu:          sync.RWMutex{},
 		rnd:         nil,  // não necessário para leitura
 		readonly:    true, // marca como imutável
 		mmapData:    data, // salva para Close()

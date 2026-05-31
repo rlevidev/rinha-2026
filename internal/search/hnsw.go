@@ -237,7 +237,7 @@ type HNSW struct {
 	// vector armazena todos os vetores do dataset de forma sequencial.
 	// O vetor do nó i ocupa vectors[i*14 : i*14+14], ou seja, 14 floats por nó.
 	// Sequencial = processador carrega 14 floats de uma vez no cache L1 ao acessar vectors[i*14].
-	vectors []float32 // 3M × 14 = 42M floats32
+	vectors []uint16 // 3M × 14 = 42M uint16
 
 	// isFraud armazena o label de cada nó. Acesso O(1) por índice.
 	isFraud []bool // 3M bools
@@ -265,11 +265,11 @@ type HNSW struct {
 	adjOffset []int32
 	adjData   []int32
 
-	entryPoint int          // nó de entrada para todas as buscas, fica no topo da hierarquia.
-	maxLayer   int          // camada mais alta construída, a busca desce de maxLayer até 0
-	numNodes   int          // total de nós inseridos (até 3M)
-	mu         sync.RWMutex // permite múltiplas leituras simultâneas; bloqueia apenas para escrita
-	rnd        *rand.Rand   // gerador aleatório local - isolado por instância, sem contenção de Mutex global
+	entryPoint int // nó de entrada para todas as buscas, fica no topo da hierarquia.
+	maxLayer   int // camada mais alta construída, a busca desce de maxLayer até 0
+	numNodes   int // total de nós inseridos (até 3M)
+	// mu sync.RWMutex // Removido: read-only no hot path
+	rnd *rand.Rand // gerador aleatório local - isolado por instância, sem contenção de Mutex global
 
 	// campos necessários para mmap.go compilar corretamente.
 	// readonly: true quando o índice foi carregado via LoadBinaryMmap.
@@ -320,7 +320,7 @@ func New(capacity, m, efConstruct, ef int) *HNSW {
 		M:           m,
 		EfConstruct: efConstruct,
 		Ef:          ef,
-		vectors:     make([]float32, 0, capacity*14),
+		vectors:     make([]uint16, 0, capacity*14),
 		isFraud:     make([]bool, 0, capacity),
 		adjOffset:   make([]int32, 0, capacity),
 		adjData:     make([]int32, 0, capacity*avgSlotsPerNode),
@@ -337,25 +337,33 @@ func New(capacity, m, efConstruct, ef int) *HNSW {
 
 // vec retorna o slice de 14 floats do nó id dentro do array sequencial
 // Centraliza o cálculo do offset para evitar erros de indexação.
-func (h *HNSW) vec(id int) []float32 {
+func (h *HNSW) vec(id int) []uint16 {
 	return h.vectors[id*14 : id*14+14]
 }
 
-func (h *HNSW) NumNodes() int { return h.numNodes }
-
-// distSq calcula a distância euclidiana ao quadrado entre dois vetores de 14 dimensões.
-// Sem raiz quadrada: sqrt(a) < sqrt(b) <-> a < b, então a raiz não é necessária para comparar.
-// Economiza ~3M chamadas sqrt por request.
-func distSq(a, b []float32) float32 {
-	a = a[:14:14] // reslice com len e cap fixos em 14: o compilador prova que len(a)==14 e elimina os bounds checks individuais do loop (BCE — Bounds Check Elimination), permitindo vetorização SIMD automática.
-	b = b[:14:14] // mesmo motivo para b.
+func distSq(a []float32, b []uint16) float32 {
+	a = a[:14:14]
+	b = b[:14:14]
 	var sum float32
 	for i := range a {
-		diff := a[i] - b[i]
+		diff := a[i] - (float32(b[i])/32767.5 - 1.0)
 		sum += diff * diff
 	}
 	return sum
 }
+
+func distSqNode(a, b []uint16) float32 {
+	a = a[:14:14]
+	b = b[:14:14]
+	var sum float32
+	for i := range a {
+		diff := float32(a[i]) - float32(b[i])
+		sum += diff * diff
+	}
+	return sum
+}
+
+func (h *HNSW) NumNodes() int { return h.numNodes }
 
 // neighbors retorna os vizinhos do nó id na chamada layer.
 // A camada 0 tem o dobro de conexões (Mx2) por ser a mais densa.
@@ -526,16 +534,16 @@ func (h *HNSW) greedySearch(query []float32, ep, layer int) int {
 
 // greedySearchInsert é idêntico ao greedySearch, mas filtra sentinels -1 nos vizinhos.
 // Usado exclusivamente durante Insert, onde slots não preenchidos contêm -1.
-func (h *HNSW) greedySearchInsert(query []float32, ep, layer int) int {
+func (h *HNSW) greedySearchInsert(query []uint16, ep, layer int) int {
 	best := ep
-	bestDist := distSq(query, h.vec(ep))
+	bestDist := distSqNode(query, h.vec(ep))
 	for {
 		improved := false
 		for _, nb := range h.neighbors(best, layer) {
 			if nb < 0 { // sentinel: slot não preenchido
 				continue
 			}
-			if d := distSq(query, h.vec(int(nb))); d < bestDist {
+			if d := distSqNode(query, h.vec(int(nb))); d < bestDist {
 				bestDist, best, improved = d, int(nb), true
 			}
 		}
@@ -617,12 +625,12 @@ func (h *HNSW) searchLayer0(query []float32, ep int, cands *minHeap, res *maxHea
 }
 
 // searchLayerN - beam search em camadas superiores durante a inserção
-func (h *HNSW) searchLayerN(query []float32, ep, layer, efConstruct int) []nodeDist {
+func (h *HNSW) searchLayerN(query []uint16, ep, layer, efConstruct int) []nodeDist {
 	// visited precisa ser isolado: cada chamada de searchLayerN tem seu próprio mapa
 	visited := make(map[int]struct{}, efConstruct*2)
 	visited[ep] = struct{}{}
 
-	epDist := distSq(query, h.vec(ep))
+	epDist := distSqNode(query, h.vec(ep))
 	cands := &minHeap{{ep, epDist}}
 	cands.up(0)
 	res := &maxHeap{{ep, epDist}}
@@ -645,7 +653,7 @@ func (h *HNSW) searchLayerN(query []float32, ep, layer, efConstruct int) []nodeD
 			}
 			visited[nbID] = struct{}{}
 
-			d := distSq(query, h.vec(nbID))
+			d := distSqNode(query, h.vec(nbID))
 			if res.len() < efConstruct || d < res.peek().dist {
 				cands.push(nodeDist{nbID, d})
 				res.push(nodeDist{nbID, d})
@@ -679,11 +687,6 @@ func (h *HNSW) searchLayerN(query []float32, ep, layer, efConstruct int) []nodeD
 //
 // O handler chama KNN5, conta quantos Neighbor.IsFraud == true e divide por 5 para obter o fraud_score.
 func (h *HNSW) KNN5(query [14]float32) [5]Neighbor {
-	// RLock permite múltiplas goroutines lendo ao mesmo tempo.
-	// Essencial para servir centenas de requests HTTP em paralelo sem serializar.
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
 	// Guard clause: índice ainda vazio (startup em andamento), retorna vazio em vez de panic.
 	if h.numNodes == 0 {
 		return [5]Neighbor{}
@@ -733,10 +736,7 @@ func (h *HNSW) KNN5(query [14]float32) [5]Neighbor {
 // =============================================================================
 
 // Insert adiciona um novo vetor ao índice HNSW.
-func (h *HNSW) Insert(vector [14]float32, isFraud bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
+func (h *HNSW) Insert(vector [14]uint16, isFraud bool) {
 	newID := h.numNodes
 	nodeLevel := h.randomLevel()
 
@@ -811,10 +811,10 @@ func (h *HNSW) Insert(vector [14]float32, isFraud bool) {
 				pool := poolBuf[:0]
 				for _, eid := range existing {
 					if eid >= 0 {
-						pool = append(pool, nodeDist{int(eid), distSq(nbVec, h.vec(int(eid)))})
+						pool = append(pool, nodeDist{int(eid), distSqNode(nbVec, h.vec(int(eid)))})
 					}
 				}
-				pool = append(pool, nodeDist{newID, distSq(nbVec, h.vec(newID))})
+				pool = append(pool, nodeDist{newID, distSqNode(nbVec, h.vec(newID))})
 
 				// Ordena do mais próximo ao mais distante (insertion sort)
 				for i := 1; i < len(pool); i++ {

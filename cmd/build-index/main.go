@@ -39,7 +39,11 @@ func main() {
 	hnsw := search.New(len(refs), *m, *efConstruct, *ef)
 
 	for i, ref := range refs {
-		hnsw.Insert(ref.Vector, ref.IsFraud)
+		var uVec [14]uint16
+		for j := 0; j < 14; j++ {
+			uVec[j] = uint16((ref.Vector[j] + 1.0) * 32767.5)
+		}
+		hnsw.Insert(uVec, ref.IsFraud)
 		if (i+1)%100000 == 0 {
 			log.Printf("Inserted %d/%d nodes", i+1, len(refs))
 		}

@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"os"
 	"sync/atomic"
 	"time"
 )
@@ -40,11 +41,22 @@ func newUnixTransport(socketPath string) http.RoundTripper {
 		MaxIdleConns:        512,
 		MaxIdleConnsPerHost: 512,
 		IdleConnTimeout:     90 * time.Second,
-		// DisableKeepAlives: false (padrão) keep-alive ativo 
+		// DisableKeepAlives: false (padrão) keep-alive ativo
 	}
 }
 
 func main() {
+	for _, s := range sockets {
+		log.Printf("LB aguardando socket: %s", s)
+		for {
+			if _, err := os.Stat(s); err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		log.Printf("Socket %s pronto.", s)
+	}
+
 	// Um ReverseProxy dedicado por backend.
 	// O proxy reescreve a URL para "http://unix/...", o Transport ignora o host
 	// e conecta sempre no socketPath correto via DialContext.

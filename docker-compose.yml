@@ -13,37 +13,38 @@ services:
       resources:
         limits:
           cpus: "0.10"
-          memory: "20MB"
+          memory: "15MB"
 
   api1:
     image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/api"]
     environment:
       - SOCKET_PATH=/sockets/api1.sock
-      - EF_OVERRIDE=20
-      - GOMAXPROCS=2
+      - EF_OVERRIDE=100
+      - GOMAXPROCS=1
     volumes:
       - sockets:/sockets
     deploy:
       resources:
         limits:
           cpus: "0.45"
-          memory: "250MB"
+          memory: "315MB"
 
   api2:
     image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/api"]
     environment:
       - SOCKET_PATH=/sockets/api2.sock
-      - EF_OVERRIDE=20
-      - GOMAXPROCS=2
+      - PEER_SOCKET=/sockets/api1.sock
+      - EF_OVERRIDE=100
+      - GOMAXPROCS=1
     volumes:
       - sockets:/sockets
     deploy:
       resources:
         limits:
           cpus: "0.45"
-          memory: "80MB"
+          memory: "20MB"
 
 volumes:
   sockets:

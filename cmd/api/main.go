@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"time"
 
 	"github.com/rlevidev/rinha-2026/internal/handler"
 	"github.com/rlevidev/rinha-2026/internal/search"
@@ -24,7 +25,18 @@ func main() {
 			runtime.GOMAXPROCS(n)
 		}
 	} else {
-		runtime.GOMAXPROCS(2)
+		runtime.GOMAXPROCS(1)
+	}
+
+	if peer := os.Getenv("PEER_SOCKET"); peer != "" {
+		log.Printf("Aguardando peer socket: %s", peer)
+		for {
+			if _, err := os.Stat(peer); err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		log.Printf("Peer socket encontrado, iniciando...")
 	}
 
 	indexPath := "/index.bin"

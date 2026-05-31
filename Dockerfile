@@ -21,9 +21,9 @@ COPY resources/ /resources/
 RUN /build-index \
     --input  /resources/references.json.gz \
     --output /index.bin \
-    --m      4 \
+    --m      8 \
     --ef-construct 200 \
-    --ef     20
+    --ef     100
 # Este stage leva ~5-10 minutos, mas roda uma vez no seu Mac
 # O avaliador recebe a imagem com o índice já pronto
 
