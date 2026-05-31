@@ -20,7 +20,7 @@ services:
     command: ["/api"]
     environment:
       - SOCKET_PATH=/sockets/api1.sock
-      - EF_OVERRIDE=10
+      - EF_OVERRIDE=20
       - GOMAXPROCS=2
     volumes:
       - sockets:/sockets
@@ -28,14 +28,14 @@ services:
       resources:
         limits:
           cpus: "0.45"
-          memory: "165MB"
+          memory: "250MB"
 
   api2:
     image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/api"]
     environment:
       - SOCKET_PATH=/sockets/api2.sock
-      - EF_OVERRIDE=10
+      - EF_OVERRIDE=20
       - GOMAXPROCS=2
     volumes:
       - sockets:/sockets
@@ -43,7 +43,7 @@ services:
       resources:
         limits:
           cpus: "0.45"
-          memory: "165MB"
+          memory: "80MB"
 
 volumes:
   sockets:

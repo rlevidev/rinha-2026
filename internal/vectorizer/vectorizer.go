@@ -29,9 +29,9 @@ type Transaction struct {
 
 	// Informações do cliente
 	Customer struct {
-		AvgAmount     float32  `json:"avg_amount"`     // Média de valor das transações anteriores do cliente. Usado na dimensão v[2] (razão do valor atual vs média)
-		TxCount24h    int      `json:"tx_count_24h"`   // Quantas transações o cliente fez nas últimas 24 horas. Usado na dimensão v[8]
-		KnowMerchants []string `json:"know_merchants"` // Lista de IDs de estabelecimentos que o cliente já fez transações. Usado na dimensão v[11] (se o estabelecimento atual é conhecido ou não)
+		AvgAmount     float32  `json:"avg_amount"`      // Média de valor das transações anteriores do cliente. Usado na dimensão v[2] (razão do valor atual vs média)
+		TxCount24h    int      `json:"tx_count_24h"`    // Quantas transações o cliente fez nas últimas 24 horas. Usado na dimensão v[8]
+		KnowMerchants []string `json:"known_merchants"` // Lista de IDs de estabelecimentos que o cliente já fez transações. Usado na dimensão v[11] (se o estabelecimento atual é conhecido ou não)
 	} `json:"customer"`
 
 	// Onde ocorre a transação
