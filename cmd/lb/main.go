@@ -1,13 +1,14 @@
 package main
 
 import (
-	"context"
+	"errors"
+	"io"
 	"log"
 	"net"
-	"net/http"
-	"net/http/httputil"
 	"sync/atomic"
 	"time"
+
+	lbrelay "github.com/rlevidev/rinha-2026/internal/lb"
 )
 
 var sockets = []string{
@@ -16,31 +17,6 @@ var sockets = []string{
 }
 
 var rr atomic.Uint64
-
-func unixTransport(socketPath string) http.RoundTripper {
-	return &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", socketPath)
-		},
-		MaxIdleConns:        64,
-		MaxIdleConnsPerHost: 32,
-		IdleConnTimeout:     30 * time.Second,
-	}
-}
-
-func proxyFor(socketPath string) *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			req.URL.Scheme = "http"
-			req.URL.Host = "unix"
-		},
-		Transport: unixTransport(socketPath),
-		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			log.Printf("backend %s failed: %v", socketPath, err)
-			http.Error(w, "backend unavailable", http.StatusBadGateway)
-		},
-	}
-}
 
 func waitForSocket(path string) {
 	for i := 0; i < 300; i++ {
@@ -53,25 +29,78 @@ func waitForSocket(path string) {
 	}
 }
 
-func main() {
-	proxies := [2]*httputil.ReverseProxy{
-		proxyFor(sockets[0]),
-		proxyFor(sockets[1]),
+func dialBackend(seq uint64) (net.Conn, string, error) {
+	primary := lbrelay.PickBackend(seq, sockets)
+	secondary := lbrelay.PickBackend(seq+1, sockets)
+
+	for _, socket := range []string{primary, secondary} {
+		conn, err := net.DialTimeout("unix", socket, 2*time.Second)
+		if err == nil {
+			return conn, socket, nil
+		}
+		log.Printf("backend %s failed: %v", socket, err)
 	}
 
+	return nil, "", errors.New("all backends unavailable")
+}
+
+func relay(client net.Conn, backend net.Conn) {
+	defer client.Close()
+	defer backend.Close()
+
+	errc := make(chan error, 2)
+
+	go func() {
+		_, err := io.Copy(backend, client)
+		errc <- err
+	}()
+
+	go func() {
+		_, err := io.Copy(client, backend)
+		errc <- err
+	}()
+
+	err := <-errc
+	if err != nil && !errors.Is(err, io.EOF) {
+		log.Printf("relay ended: %v", err)
+	}
+
+	_ = client.Close()
+	_ = backend.Close()
+	<-errc
+}
+
+func serveConn(client net.Conn) {
+	seq := rr.Add(1) - 1
+	backend, socket, err := dialBackend(seq)
+	if err != nil {
+		log.Printf("unable to route client: %v", err)
+		return
+	}
+	log.Printf("routing client to %s", socket)
+	relay(client, backend)
+}
+
+func main() {
 	for _, socket := range sockets {
 		waitForSocket(socket)
 	}
 
-	srv := &http.Server{
-		Addr:              ":9999",
-		ReadHeaderTimeout: 2 * time.Second,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			idx := int(rr.Add(1)-1) & 1
-			proxies[idx].ServeHTTP(w, r)
-		}),
+	listener, err := net.Listen("tcp", ":9999")
+	if err != nil {
+		log.Fatal(err)
 	}
+	defer listener.Close()
 
 	log.Println("lb listening on :9999")
-	log.Fatal(srv.ListenAndServe())
+
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			log.Printf("accept failed: %v", err)
+			continue
+		}
+
+		go serveConn(conn)
+	}
 }
