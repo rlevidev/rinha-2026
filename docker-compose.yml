@@ -1,5 +1,6 @@
 services:
   lb:
+    build: .
     image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/lb"]
     ports:
@@ -16,6 +17,7 @@ services:
           memory: "15MB"
 
   api1:
+    build: .
     image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/api"]
     environment:
@@ -31,6 +33,7 @@ services:
           memory: "165MB"
 
   api2:
+    build: .
     image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/api"]
     environment:

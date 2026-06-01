@@ -1,0 +1,107 @@
+{
+  "repo-url": "https://github.com/vinicius-piassa/rinha-backend-2026-go",
+  "test-results": {
+    "expected": {
+      "total": 54100,
+      "fraud_count": 23959,
+      "legit_count": 30141,
+      "fraud_rate": 0.4429,
+      "legit_rate": 0.5571,
+      "edge_case_count": 645,
+      "edge_case_rate": 0.0119
+    },
+    "p99": "0.45ms",
+    "scoring": {
+      "breakdown": {
+        "false_positive_detections": 0,
+        "false_negative_detections": 0,
+        "true_positive_detections": 23942,
+        "true_negative_detections": 30117,
+        "http_errors": 0
+      },
+      "failure_rate": "0%",
+      "weighted_errors_E": 0,
+      "error_rate_epsilon": 0,
+      "p99_score": { "value": 3000, "cut_triggered": false },
+      "detection_score": {
+        "value": 3000,
+        "rate_component": 3000,
+        "absolute_penalty": 0,
+        "cut_triggered": false
+      },
+      "final_score": 6000,
+      "raw": {
+        "p99_ms": 0.44514215999999923,
+        "failure_rate": 0,
+        "error_rate_epsilon": 0,
+        "p99_score": 3000,
+        "detection_score": 3000,
+        "rate_component": 3000,
+        "absolute_penalty": 0,
+        "final_score": 6000
+      }
+    }
+  },
+  "runtime-info": {
+    "mem": 350,
+    "cpu": 1,
+    "images": {
+      "ghcr.io/vinicius-piassa/rinha-backend-2026-go:43a8d57": [
+        {
+          "Name": "/submission-lb-1",
+          "Platform": "linux",
+          "Image": "ghcr.io/vinicius-piassa/rinha-backend-2026-go:43a8d57",
+          "Service": "lb",
+          "HostConfig": {
+            "NetworkMode": "submission_default",
+            "Memory": 8388608,
+            "NanoCpus": 50000000,
+            "IpcMode": "private",
+            "Binds": ["<redacted>/submission_sockets:/sockets:rw"],
+            "PidMode": "",
+            "CapAdd": null,
+            "PortBindings": { "tcp": [{ "HostIp": "", "HostPort": "9999" }] },
+            "Privileged": false
+          }
+        },
+        {
+          "Name": "/submission-api1-1",
+          "Platform": "linux",
+          "Image": "ghcr.io/vinicius-piassa/rinha-backend-2026-go:43a8d57",
+          "Service": "api1",
+          "HostConfig": {
+            "NetworkMode": "submission_default",
+            "Memory": 179306496,
+            "NanoCpus": 475000000,
+            "IpcMode": "private",
+            "Binds": ["<redacted>/submission_sockets:/sockets:rw"],
+            "PidMode": "",
+            "CapAdd": null,
+            "PortBindings": {},
+            "Privileged": false
+          }
+        },
+        {
+          "Name": "/submission-api2-1",
+          "Platform": "linux",
+          "Image": "ghcr.io/vinicius-piassa/rinha-backend-2026-go:43a8d57",
+          "Service": "api2",
+          "HostConfig": {
+            "NetworkMode": "submission_default",
+            "Memory": 179306496,
+            "NanoCpus": 475000000,
+            "IpcMode": "private",
+            "Binds": ["<redacted>/submission_sockets:/sockets:rw"],
+            "PidMode": "",
+            "CapAdd": null,
+            "PortBindings": {},
+            "Privileged": false
+          }
+        }
+      ]
+    },
+    "instances-number-ok?": true,
+    "unlimited-services": null,
+    "commit": "c88ad58"
+  }
+}

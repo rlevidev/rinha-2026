@@ -1,0 +1,109 @@
+{
+  "repo-url": "https://github.com/rlevidev/rinha-2026",
+  "test-results": {
+    "expected": {
+      "total": 54100,
+      "fraud_count": 23959,
+      "legit_count": 30141,
+      "fraud_rate": 0.4429,
+      "legit_rate": 0.5571,
+      "edge_case_count": 645,
+      "edge_case_rate": 0.0119
+    },
+    "p99": "2002.27ms",
+    "scoring": {
+      "breakdown": {
+        "false_positive_detections": 0,
+        "false_negative_detections": 1515,
+        "true_positive_detections": 0,
+        "true_negative_detections": 1907,
+        "http_errors": 11157
+      },
+      "failure_rate": "86.92%",
+      "weighted_errors_E": 60330,
+      "error_rate_epsilon": 4.138144,
+      "p99_score": { "value": -3000, "cut_triggered": true },
+      "detection_score": {
+        "value": -3000,
+        "rate_component": null,
+        "absolute_penalty": null,
+        "cut_triggered": true
+      },
+      "final_score": -6000,
+      "raw": {
+        "p99_ms": 2002.2651258600001,
+        "failure_rate": 0.8691954180670828,
+        "error_rate_epsilon": 4.138143905617669,
+        "p99_score": -3000,
+        "detection_score": -3000,
+        "rate_component": null,
+        "absolute_penalty": null,
+        "final_score": -6000
+      }
+    }
+  },
+  "runtime-info": {
+    "mem": 350,
+    "cpu": 1,
+    "images": {
+      "ghcr.io/ghcr.io/rlevidev/rinha-2026:latest": [
+        {
+          "Name": "/submission-lb-1",
+          "Platform": "linux",
+          "Image": "ghcr.io/ghcr.io/rlevidev/rinha-2026:latest",
+          "Service": "lb",
+          "HostConfig": {
+            "NetworkMode": "submission_default",
+            "Memory": 20971520,
+            "NanoCpus": 100000000,
+            "IpcMode": "private",
+            "Binds": ["<redacted>/submission_sockets:/sockets:rw"],
+            "PidMode": "",
+            "CapAdd": null,
+            "PortBindings": { "tcp": [{ "HostIp": "", "HostPort": "9999" }] },
+            "Privileged": false
+          }
+        }
+      ],
+      "ghcr.io/rlevidev/rinha-2026:latest": [
+        {
+          "Name": "/submission-api2-1",
+          "Platform": "linux",
+          "Image": "ghcr.io/rlevidev/rinha-2026:latest",
+          "Service": "api2",
+          "HostConfig": {
+            "NetworkMode": "submission_default",
+            "Memory": 173015040,
+            "NanoCpus": 450000000,
+            "IpcMode": "private",
+            "Binds": ["<redacted>/submission_sockets:/sockets:rw"],
+            "PidMode": "",
+            "CapAdd": null,
+            "PortBindings": {},
+            "Privileged": false
+          }
+        },
+        {
+          "Name": "/submission-api1-1",
+          "Platform": "linux",
+          "Image": "ghcr.io/rlevidev/rinha-2026:latest",
+          "Service": "api1",
+          "HostConfig": {
+            "NetworkMode": "submission_default",
+            "Memory": 173015040,
+            "NanoCpus": 450000000,
+            "IpcMode": "private",
+            "Binds": ["<redacted>/submission_sockets:/sockets:rw"],
+            "PidMode": "",
+            "CapAdd": null,
+            "PortBindings": {},
+            "Privileged": false
+          }
+        }
+      ]
+    },
+    "instances-number-ok?": true,
+    "unlimited-services": null,
+    "commit": "83ae453"
+  }
+}
