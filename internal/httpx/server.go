@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -25,10 +26,21 @@ func ServeConn(conn net.Conn, h *fraud.Handler) {
 	defer conn.Close()
 
 	br := bufio.NewReader(conn)
-	resp, err := handleRequest(br, h)
-	if err != nil {
-		resp = h.Score(nil)
-	}
+	resp := h.Fallback()
+
+	func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("panic serving request: %v", rec)
+				resp = h.Fallback()
+			}
+		}()
+
+		if next, err := handleRequest(br, h); err == nil {
+			resp = next
+		}
+	}()
+
 	_, _ = writeAll(conn, resp)
 }
 

@@ -27,13 +27,9 @@ func (h *Handler) Ready() []byte {
 	return readyResponse
 }
 
-func (h *Handler) Score(body []byte) (resp []byte) {
-	defer func() {
-		if recover() != nil {
-			resp = fallbackResponse
-		}
-	}()
+func (h *Handler) Fallback() []byte { return fallbackResponse }
 
+func (h *Handler) Score(body []byte) []byte {
 	var req Request
 	if !ParseRequest(body, &req) {
 		return fallbackResponse

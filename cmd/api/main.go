@@ -39,13 +39,17 @@ func main() {
 	if socketPath == "" {
 		socketPath = "/sockets/api.sock"
 	}
-	_ = os.Remove(socketPath)
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("remove stale socket: %v", err)
+	}
 
 	ln, err := net.Listen("unix", socketPath)
 	if err != nil {
 		log.Fatalf("listen unix: %v", err)
 	}
-	_ = os.Chmod(socketPath, 0o666)
+	if err := os.Chmod(socketPath, 0o666); err != nil {
+		log.Printf("chmod socket: %v", err)
+	}
 
 	handler := &fraud.Handler{
 		Indexes:    partitions,
@@ -56,6 +60,9 @@ func main() {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Temporary() {
+				continue
+			}
 			log.Fatalf("accept: %v", err)
 		}
 		go httpx.ServeConn(conn, handler)
