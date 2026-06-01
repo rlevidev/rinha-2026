@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"os"
 	"sync/atomic"
 	"time"
 )

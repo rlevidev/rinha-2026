@@ -8,7 +8,6 @@ import (
 	"os"
 	"runtime"
 	"strconv"
-	"time"
 
 	"github.com/rlevidev/rinha-2026/internal/handler"
 	"github.com/rlevidev/rinha-2026/internal/search"
