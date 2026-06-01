@@ -124,12 +124,15 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 	}
 
 	// Mapeia arquivo em memória com leitura compartilhada entre processos
+	// Removido o MAP_POPULATE
+	// Em maquinas fracas/HDDs lentos, forçar o carregamento síncrono de 300MB
+	// trava o runtime do Go e estoura os timeouts do container
 	data, err := syscall.Mmap(
 		int(f.Fd()),
 		0,
 		size,
 		syscall.PROT_READ,
-		syscall.MAP_SHARED|syscall.MAP_POPULATE,
+		syscall.MAP_SHARED,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to mmap file: %w", err)

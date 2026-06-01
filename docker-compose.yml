@@ -28,14 +28,13 @@ services:
       resources:
         limits:
           cpus: "0.45"
-          memory: "315MB"
+          memory: "165MB"
 
   api2:
     image: ghcr.io/rlevidev/rinha-2026:latest
     command: ["/api"]
     environment:
       - SOCKET_PATH=/sockets/api2.sock
-      - PEER_SOCKET=/sockets/api1.sock
       - EF_OVERRIDE=100
       - GOMAXPROCS=1
     volumes:
@@ -44,7 +43,7 @@ services:
       resources:
         limits:
           cpus: "0.45"
-          memory: "20MB"
+          memory: "165MB"
 
 volumes:
   sockets:

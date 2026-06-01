@@ -28,16 +28,9 @@ func main() {
 		runtime.GOMAXPROCS(1)
 	}
 
-	if peer := os.Getenv("PEER_SOCKET"); peer != "" {
-		log.Printf("Aguardando peer socket: %s", peer)
-		for {
-			if _, err := os.Stat(peer); err == nil {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		log.Printf("Peer socket encontrado, iniciando...")
-	}
+	// Removido o loop bloqueante PEER_SOCKET
+	// Ele forçava a API2 a aguardar a API1, aumentando exponencialmente o boot time
+	// causando timeouts no K6 antes do servidor estar no ar.
 
 	indexPath := "/index.bin"
 	log.Printf("Carregando índice de %s via mmap...", indexPath)

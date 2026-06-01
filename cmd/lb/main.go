@@ -46,23 +46,12 @@ func newUnixTransport(socketPath string) http.RoundTripper {
 }
 
 func main() {
-	for _, s := range sockets {
-		log.Printf("LB aguardando socket: %s", s)
-		for {
-			if _, err := os.Stat(s); err == nil {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		log.Printf("Socket %s pronto.", s)
-	}
-
 	// Um ReverseProxy dedicado por backend.
 	// O proxy reescreve a URL para "http://unix/...", o Transport ignora o host
 	// e conecta sempre no socketPath correto via DialContext.
 	proxies := [2]*httputil.ReverseProxy{
-		newProxy(sockets[0]),
-		newProxy(sockets[1]),
+		newProxy(sockets[0], sockets[1]), // Passando fallback para falhas
+		newProxy(sockets[1], sockets[0]),
 	}
 
 	srv := &http.Server{
@@ -72,11 +61,8 @@ func main() {
 			n := counter.Add(1) - 1
 			idx := n % 2
 
-			// Tenta o backend escolhido. Se falhar (backend fora do ar), usa o outro.
-			// ErrorHandler no proxy captura erros de conexão e faz o fallback.
 			proxies[idx].ServeHTTP(w, r)
 		}),
-		// Timeouts conservadores para a Rinha: requests são curtos, sem streaming.
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 5 * time.Second,
 	}
@@ -86,25 +72,37 @@ func main() {
 }
 
 // newProxy cria um ReverseProxy apontando para socketPath.
-// O ErrorHandler registra a falha e responde 502 em vez de deixar o panic
-// propagar o k6 trata 502 como erro HTTP, mas pelo menos não derruba o LB.
-func newProxy(socketPath string) *httputil.ReverseProxy {
+// Recebe um fallback para redirecionar em caso de 502/falha.
+func newProxy(socketPath string, fallbackSocket string) *httputil.ReverseProxy {
 	transport := newUnixTransport(socketPath)
+	fallbackTransport := newUnixTransport(fallbackSocket)
 
 	proxy := &httputil.ReverseProxy{
 		Director: func(req *http.Request) {
-			// ReverseProxy precisa de uma URL válida para montar o request.
-			// O Transport ignora o host e conecta no socket, o scheme e host
-			// aqui são apenas placeholders obrigatórios para o http.Client interno.
 			req.URL.Scheme = "http"
 			req.URL.Host = "unix"
 		},
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			// Backend inacessível: loga e retorna 502.
-			// O k6 da Rinha conta erros HTTP 502 tem peso menor que timeout.
-			log.Printf("LB: erro no backend %s: %v", socketPath, err)
-			http.Error(w, "backend unavailable", http.StatusBadGateway)
+			log.Printf("LB: erro no backend %s, tentando fallback %s: %v", socketPath, fallbackSocket, err)
+
+			// Em caso de falha no principal, o LB não desiste (Error HTTP) e sim injeta
+			// a request no Transport do Fallback.
+			req := r.Clone(r.Context())
+
+			// Setup mock proxy fallback manual
+			fbProxy := &httputil.ReverseProxy{
+				Director: func(req *http.Request) {
+					req.URL.Scheme = "http"
+					req.URL.Host = "unix"
+				},
+				Transport: fallbackTransport,
+				ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+					log.Printf("LB: Erro crítico em ambos os backends. %v", err)
+					http.Error(w, "backend unavailable", http.StatusBadGateway)
+				},
+			}
+			fbProxy.ServeHTTP(w, req)
 		},
 	}
 
