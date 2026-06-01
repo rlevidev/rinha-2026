@@ -68,18 +68,13 @@ func LoadSet(dir string) (*Set, error) {
 
 // ForTag returns the best available partition for tag.
 func (s *Set) ForTag(tag int) *Index {
-	if tag < 0 || tag >= len(s.parts) {
-		return nil
+	order := []int{tag, tag & 8, tag & 4, tag & 2, tag & 1, 0}
+	for _, candidate := range order {
+		if candidate >= 0 && candidate < len(s.parts) && s.parts[candidate] != nil {
+			return s.parts[candidate]
+		}
 	}
-	if s.parts[tag] != nil {
-		return s.parts[tag]
-	}
-	tag &^= 8
-	if s.parts[tag] != nil {
-		return s.parts[tag]
-	}
-	tag &^= 4
-	return s.parts[tag]
+	return nil
 }
 
 // Open maps and validates one partition file.
@@ -233,10 +228,8 @@ func (ix *Index) Search(q *[16]int16) uint8 {
 		packed[c] = (lb << IdxBits) | int64(c)
 	}
 
-	probeLimit := ProbeLimit
-	repair := false
-	for {
-		for probes := 0; probes < probeLimit; probes++ {
+	probeClusters := func(limit int) {
+		for probes := 0; probes < limit; probes++ {
 			bestKey := maxKey
 			bestCluster := -1
 			for c := 0; c < ix.clusters; c++ {
@@ -246,35 +239,34 @@ func (ix *Index) Search(q *[16]int16) uint8 {
 				}
 			}
 			if bestCluster < 0 || bestKey == maxKey {
-				break
+				return
 			}
 			bestLower := bestKey >> IdxBits
 			if bestLower >= (worstKey >> IdxBits) {
-				break
+				return
 			}
 			packed[bestCluster] = maxKey
 			ix.scanCluster(bestCluster, q, &top, &worstKey)
 		}
-
-		if repair {
-			break
-		}
-		if worstKey != maxKey {
-			fraudCount := uint8(0)
-			for _, l := range top.label {
-				fraudCount += l
-			}
-			if fraudCount < 1 || fraudCount > 4 {
-				break
-			}
-		}
-		repair = true
-		probeLimit = ix.clusters
 	}
 
-	var fraudCount uint8
+	probeClusters(ProbeLimit)
+
+	fraudCount := uint8(0)
 	for _, label := range top.label {
 		fraudCount += label
 	}
+	if fraudCount > 0 && fraudCount < 5 {
+		repairBudget := ix.clusters / 8
+		if repairBudget < 1 {
+			repairBudget = 1
+		}
+		probeClusters(repairBudget)
+		fraudCount = 0
+		for _, label := range top.label {
+			fraudCount += label
+		}
+	}
+
 	return fraudCount
 }

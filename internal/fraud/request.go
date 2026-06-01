@@ -778,7 +778,7 @@ func Vectorize(r *Request, n *Normalizer) [16]int16 {
 	return v
 }
 
-// PartitionTag selects the index partition for a parsed request.
+// PartitionTag selects the 4-bit index partition for a parsed request.
 func PartitionTag(r *Request) int {
 	tag := 0
 	if r.HasLastTx {

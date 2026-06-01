@@ -65,3 +65,16 @@ func TestParseRequestAndVectorize(t *testing.T) {
 		t.Fatalf("PartitionTag() = %d, want 8", got)
 	}
 }
+
+func TestPartitionTagFourBitLayout(t *testing.T) {
+	req := Request{
+		HasLastTx:     true,
+		KnownMerchant: true,
+		IsOnline:      true,
+		CardPresent:   true,
+	}
+
+	if got := PartitionTag(&req); got != 13 {
+		t.Fatalf("PartitionTag() = %d, want 13", got)
+	}
+}

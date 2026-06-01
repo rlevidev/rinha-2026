@@ -19,3 +19,30 @@ func TestLoadSetAndSearch(t *testing.T) {
 		t.Fatalf("Search returned invalid fraud count %d", got)
 	}
 }
+
+func TestPartitionFallbackOrder(t *testing.T) {
+	var s Set
+	s.parts[8] = &Index{}
+	s.parts[0] = &Index{}
+
+	if got := s.ForTag(13); got != s.parts[8] {
+		t.Fatalf("ForTag(13) = %v, want exact known fallback %v", got, s.parts[8])
+	}
+}
+
+func TestSearchKeepsBoundedProbeBudget(t *testing.T) {
+	set, err := LoadSet("../../index")
+	if err != nil {
+		t.Fatalf("LoadSet failed: %v", err)
+	}
+	ix := set.ForTag(0)
+	if ix == nil {
+		t.Fatal("expected partition 0")
+	}
+
+	var q [16]int16
+	got := ix.Search(&q)
+	if got > 5 {
+		t.Fatalf("Search returned invalid fraud count %d", got)
+	}
+}
