@@ -3,13 +3,12 @@ package main
 import (
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"runtime"
 	"strconv"
-	"time"
 
 	"github.com/rlevidev/rinha-2026/internal/fraud"
+	"github.com/rlevidev/rinha-2026/internal/httpx"
 	"github.com/rlevidev/rinha-2026/internal/index"
 )
 
@@ -53,11 +52,12 @@ func main() {
 		Normalizer: normalizer,
 	}
 
-	srv := &http.Server{
-		Handler:           handler,
-		ReadHeaderTimeout: 2 * time.Second,
-	}
-
 	log.Printf("api ready on %s", socketPath)
-	log.Fatal(srv.Serve(ln))
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			log.Fatalf("accept: %v", err)
+		}
+		go httpx.ServeConn(conn, handler)
+	}
 }
