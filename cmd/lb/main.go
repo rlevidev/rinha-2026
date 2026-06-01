@@ -18,15 +18,16 @@ var sockets = []string{
 
 var rr atomic.Uint64
 
-func waitForSocket(path string) {
+func waitForSocket(path string) bool {
 	for i := 0; i < 300; i++ {
 		conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			return
+			return true
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	return false
 }
 
 func dialBackend(seq uint64) (net.Conn, string, error) {
@@ -45,9 +46,6 @@ func dialBackend(seq uint64) (net.Conn, string, error) {
 }
 
 func relay(client net.Conn, backend net.Conn) {
-	defer client.Close()
-	defer backend.Close()
-
 	errc := make(chan error, 2)
 
 	go func() {
@@ -71,6 +69,8 @@ func relay(client net.Conn, backend net.Conn) {
 }
 
 func serveConn(client net.Conn) {
+	defer client.Close()
+
 	seq := rr.Add(1) - 1
 	backend, socket, err := dialBackend(seq)
 	if err != nil {
@@ -83,7 +83,9 @@ func serveConn(client net.Conn) {
 
 func main() {
 	for _, socket := range sockets {
-		waitForSocket(socket)
+		if !waitForSocket(socket) {
+			log.Printf("socket %s did not become ready in time; continuing", socket)
+		}
 	}
 
 	listener, err := net.Listen("tcp", ":9999")
