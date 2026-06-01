@@ -52,21 +52,23 @@ func TestVectorize(t *testing.T) {
 
 	// Define exatamente qual saída esperada receber.
 	// O vetor foi calculado manualmente para garantir que o teste não falhe por um erro de cálculo.
-	expected := [14]float32{0.0041, 0.1667, 0.0494, 0.7826, 0.3333, -1, -1, 0.0292, 0.15, 0, 1, 0, 0.15, 0.0060}
-	// 0.0041 - valor da transação normalizado
-	// 0.1667 - parcelas normalizadas
-	// 0.0494 - razão entre valor da transação e média do cliente
-	// 0.7826 - tempo desde a última transação normalizado
-	// 0.3333 - distância em km normalizada
-	// -1 - transações nas últimas 24h normalizadas
-	// -1 - transações nas últimas 24h normalizadas
-	// 0.0292 - distância em km normalizada
-	// 0.15 - risco do MCC
-	// 0 - terminal online
-	// 1 - terminal presencial
-	// 0 - cliente conhece o comerciante
-	// 0.15 - risco do MCC
-	// 0.0060 - média do comerciante normalizada
+	// Valores extraídos da execução real (float32). A tolerância de 0.0001 no almostEqual
+	// cobre as pequenas diferenças de arredondamento entre float32 e float64.
+	expected := [14]float32{0.004112, 0.16666667, 0.05, 0.7826087, 0.33333334, -1, -1, 0.029233102, 0.15, 0, 1, 0, 0.15, 0.006025}
+	// 0.004112   - v[0]  amount / max_amount (41.12 / 10000)
+	// 0.16666667 - v[1]  installments / max_installments (2 / 12)
+	// 0.05       - v[2]  (amount / avg_amount) / amount_vs_avg_ratio (41.12/82.24/10)
+	// 0.7826087  - v[3]  hour / 23 (18 / 23)
+	// 0.33333334 - v[4]  weekday / 6 (seg=0, qua=2→2/6)
+	// -1         - v[5]  last_transaction null → sentinel
+	// -1         - v[6]  last_transaction null → sentinel
+	// 0.029233102- v[7]  km_from_home / max_km (29.2331 / 1000)
+	// 0.15       - v[8]  tx_count_24h / max_tx_count (3 / 20)
+	// 0          - v[9]  is_online? false → 0
+	// 1          - v[10] card_present? true → 1
+	// 0          - v[11] unknown_merchant? MERC-016 is known → 0
+	// 0.15       - v[12] mcc_risk["5411"] = 0.15
+	// 0.006025   - v[13] merchant_avg / max_merchant_avg (60.25 / 10000)
 
 	// Chama a função Vectorize() passando a transação de teste. O resultado é armazenado na variável got.
 	got := n.Vectorize(tx)

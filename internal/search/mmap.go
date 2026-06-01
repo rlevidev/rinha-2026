@@ -249,6 +249,40 @@ func LoadBinaryMmap(path string) (*HNSW, error) {
 	return h, nil
 }
 
+// MadviseWillneed chama madvise(MADV_WILLNEED) no mmap inteiro.
+// Isso instrui o kernel a pré-carregar as páginas do arquivo no page cache
+// antes que elas sejam acessadas, eliminando page faults sob carga.
+func (h *HNSW) MadviseWillneed() error {
+	if !h.readonly || h.mmapData == nil {
+		return nil
+	}
+	return syscall.Madvise(h.mmapData, syscall.MADV_WILLNEED)
+}
+
+// WarmupPageCache faz uma leitura sequencial de cada página do mmap.
+// Força o kernel a carregar todo o índice no page cache.
+// Usado como fallback caso MADV_WILLNEED não esteja disponível.
+func (h *HNSW) WarmupPageCache() {
+	if !h.readonly || h.mmapData == nil {
+		return
+	}
+	// Sequential read: acessa o primeiro byte de cada página de 4KB.
+	// O kernel carrega a página inteira (4KB) no page cache com um único page fault.
+	for i := 0; i < len(h.mmapData); i += 4096 {
+		_ = h.mmapData[i]
+	}
+	// Acessa o último byte para garantir que a última página também seja carregada.
+	if len(h.mmapData) > 0 {
+		_ = h.mmapData[len(h.mmapData)-1]
+	}
+}
+
+// MmapData retorna o slice de bytes do mmap subjacente.
+// Usado para logging e debugging (ex: tamanho do índice).
+func (h *HNSW) MmapData() []byte {
+	return h.mmapData
+}
+
 // Close libera a memória mapeada via mmap.
 // DEVE SER CHAMADO quando a API desligar, idealmente via defer na função main
 // ou em um hook de shutdown (signal handler).

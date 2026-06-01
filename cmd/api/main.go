@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"math/rand"
 	"net"
 	"net/http"
 	"os"
@@ -15,21 +14,18 @@ import (
 )
 
 func main() {
-	// GOMAXPROCS: configura paralelismo para casar com o limite de CPU do container.
-	// Com cpus="0.45", o padrão seria 4 (NumCPU do host), causando context switching.
-	// GOMAXPROCS=2 usa 2 threads OS para 0.45 CPU — equilíbrio entre paralelismo e contenção.
+	// GOMAXPROCS: com cpus="0.45", usar 2 threads OS permite processar requisições
+	// concorrentemente sem exceder o time-slice da CPU. Com GOMAXPROCS=1 e HNSW search
+	// sendo CPU-bound puro (sem I/O), uma única goroutine bloqueia todo o pipeline,
+	// criando fila de espera que empurra o p99 para cima do timeout de 2001ms.
 	// Pode ser sobrescrito via variável de ambiente para experimentação.
 	if gmp := os.Getenv("GOMAXPROCS"); gmp != "" {
 		if n, err := strconv.Atoi(gmp); err == nil && n > 0 {
 			runtime.GOMAXPROCS(n)
 		}
 	} else {
-		runtime.GOMAXPROCS(1)
+		runtime.GOMAXPROCS(2)
 	}
-
-	// Removido o loop bloqueante PEER_SOCKET
-	// Ele forçava a API2 a aguardar a API1, aumentando exponencialmente o boot time
-	// causando timeouts no K6 antes do servidor estar no ar.
 
 	indexPath := "/index.bin"
 	log.Printf("Carregando índice de %s via mmap...", indexPath)
@@ -38,7 +34,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("Erro ao carregar índice: %v", err)
 	}
-	log.Printf("Índice carregado. Ef=%d, M=%d, nodes=%d", index.Ef, index.M, index.NumNodes())
+	log.Printf("Índice carregado. Ef=%d, M=%d, nodes=%d, size=%dMB",
+		index.Ef, index.M, index.NumNodes(), len(index.MmapData())/1024/1024)
+
+	// Pré-carrega o índice inteiro no page cache do kernel.
+	// O índice tem ~340MB. Sem pré-carregamento, cada busca sofre dezenas de page faults
+	// (1-10ms cada), que somados ultrapassam o timeout de 2001ms no p99.
+	// Estratégia: MADV_WILLNEED (hint ao kernel) + sequential scan (fallback).
+	log.Printf("Pré-carregando %dMB no page cache...", len(index.MmapData())/1024/1024)
+	if err := index.MadviseWillneed(); err != nil {
+		log.Printf("MADV_WILLNEED ignorado (%v), usando sequential scan fallback...", err)
+		index.WarmupPageCache()
+	}
+	log.Printf("Page cache aquecido.")
 
 	norm, err := vectorizer.LoadNormalizer(
 		"/resources/normalization.json",
@@ -47,20 +55,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Erro ao carregar normalizer: %v", err)
 	}
-
-	// Warmup: faz 200 buscas com vetores aleatórios antes de sinalizar pronto.
-	// Isso aquece o page cache do kernel para as regiões críticas do índice,
-	// evitando page faults durante o teste real que causariam picos de latência.
-	log.Printf("Aquecendo page cache com 200 buscas dummy...")
-	rng := rand.New(rand.NewSource(42))
-	for i := 0; i < 200; i++ {
-		var q [14]float32
-		for j := range q {
-			q[j] = rng.Float32()
-		}
-		index.KNN5(q)
-	}
-	log.Printf("Warmup concluído.")
 
 	h := &handler.FraudHandler{
 		Index:      index,

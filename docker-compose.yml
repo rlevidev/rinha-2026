@@ -20,7 +20,7 @@ services:
     command: ["/api"]
     environment:
       - SOCKET_PATH=/sockets/api1.sock
-      - EF_OVERRIDE=100
+      - EF_OVERRIDE=50
       - GOMAXPROCS=1
     volumes:
       - sockets:/sockets
@@ -35,7 +35,7 @@ services:
     command: ["/api"]
     environment:
       - SOCKET_PATH=/sockets/api2.sock
-      - EF_OVERRIDE=100
+      - EF_OVERRIDE=50
       - GOMAXPROCS=1
     volumes:
       - sockets:/sockets
