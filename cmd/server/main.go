@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strconv"
-	"unsafe"
+	"time"
 
 	"github.com/rlevidev/rinha-2026/internal/fraud"
 	"github.com/rlevidev/rinha-2026/internal/index"
@@ -122,26 +122,26 @@ func handleRequest(req []byte, bodyOff int) []byte {
 func sendAll(fd int, p []byte) error {
 	off := 0
 	for off < len(p) {
-		n, errno := sendRaw(fd, p[off:])
-		if errno == unix.EINTR {
+		n, err := sendRaw(fd, p[off:])
+		if err == unix.EINTR {
 			continue
 		}
-		if errno == unix.EAGAIN || errno == unix.EWOULDBLOCK {
+		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+			time.Sleep(time.Millisecond)
 			continue
 		}
-		if errno != 0 {
-			return errno
+		if err != nil {
+			return err
 		}
 		off += n
 	}
 	return nil
 }
 
-type schedParam struct{ priority int32 }
-
 func setRealtimePriority() {
-	p := schedParam{priority: workerRTPri}
-	unix.Syscall(unix.SYS_SCHED_SETSCHEDULER, 0, uintptr(schedFIFO), uintptr(unsafe.Pointer(&p)))
+	// best-effort; containers may lack CAP_SYS_NICE
+	attr := unix.SchedAttr{Size: unix.SizeofSchedAttr, Policy: unix.SCHED_FIFO, Priority: workerRTPri}
+	unix.SchedSetAttr(0, &attr, 0)
 }
 
 func closeClient(fd int) {
@@ -195,16 +195,13 @@ func indexFold(hay, needle []byte) int {
 	return -1
 }
 
-func recvNB(fd int, p []byte) (int, unix.Errno) {
-	r0, _, e := unix.RawSyscall6(unix.SYS_RECVFROM, uintptr(fd),
-		uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), uintptr(unix.MSG_DONTWAIT), 0, 0)
-	return int(r0), e
+func recvNB(fd int, p []byte) (int, error) {
+	n, err := unix.Read(fd, p)
+	return n, err
 }
 
-func sendRaw(fd int, p []byte) (int, unix.Errno) {
-	r0, _, e := unix.RawSyscall6(unix.SYS_SENDTO, uintptr(fd),
-		uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), uintptr(unix.MSG_NOSIGNAL), 0, 0)
-	return int(r0), e
+func sendRaw(fd int, p []byte) (int, error) {
+	return unix.Write(fd, p)
 }
 
 func handleClientEvent(fd int) {
@@ -213,11 +210,11 @@ func handleClientEvent(fd int) {
 		closeClient(fd)
 		return
 	}
-	n, errno := recvNB(fd, st.buf[st.pos:])
-	if errno == unix.EAGAIN || errno == unix.EWOULDBLOCK || errno == unix.EINTR {
+	n, err := recvNB(fd, st.buf[st.pos:])
+	if err == unix.EAGAIN || err == unix.EWOULDBLOCK || err == unix.EINTR {
 		return
 	}
-	if n == 0 || errno != 0 {
+	if n == 0 || err != nil {
 		closeClient(fd)
 		return
 	}
@@ -309,7 +306,6 @@ func die(msg string) {
 
 func main() {
 	runtime.GOMAXPROCS(1)
-	debug.SetGCPercent(-1)
 	debug.SetMemoryLimit(160 << 20)
 
 	if len(os.Args) < 2 {
@@ -326,7 +322,6 @@ func main() {
 	}
 
 	unix.Prctl(unix.PR_SET_TIMERSLACK, 1, 0, 0, 0)
-	unix.Mlockall(unix.MCL_CURRENT | unix.MCL_FUTURE)
 
 	states = make([]connState, maxFDs)
 
