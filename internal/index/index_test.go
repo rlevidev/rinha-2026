@@ -23,10 +23,23 @@ func TestLoadSetAndSearch(t *testing.T) {
 func TestPartitionFallbackOrder(t *testing.T) {
 	var s Set
 	s.parts[8] = &Index{}
+	s.parts[4] = &Index{}
+	s.parts[1] = &Index{}
 	s.parts[0] = &Index{}
 
-	if got := s.ForTag(13); got != s.parts[8] {
-		t.Fatalf("ForTag(13) = %v, want exact known fallback %v", got, s.parts[8])
+	cases := []struct {
+		tag  int
+		want *Index
+	}{
+		{tag: 13, want: s.parts[8]},
+		{tag: 7, want: s.parts[4]},
+		{tag: 3, want: s.parts[1]},
+	}
+
+	for _, tc := range cases {
+		if got := s.ForTag(tc.tag); got != tc.want {
+			t.Fatalf("ForTag(%d) = %v, want %v", tc.tag, got, tc.want)
+		}
 	}
 }
 

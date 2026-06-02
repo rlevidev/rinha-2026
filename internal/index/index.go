@@ -10,14 +10,15 @@ import (
 )
 
 const (
-	NDims      = 14
-	NPairs     = 7
-	NClusters  = 2048
-	IdxBits    = 22
-	CidBits    = 12
-	CidMask    = 0xFFF
-	ProbeLimit = 12
-	magic      = "RNH4-IDX"
+	NDims              = 14
+	NPairs             = 7
+	NClusters          = 2048
+	IdxBits            = 22
+	CidBits            = 12
+	CidMask            = 0xFFF
+	initialProbeBudget = 12
+	repairProbeDivisor = 8
+	magic              = "RNH4-IDX"
 )
 
 type Index struct {
@@ -68,8 +69,17 @@ func LoadSet(dir string) (*Set, error) {
 
 // ForTag returns the best available partition for tag.
 func (s *Set) ForTag(tag int) *Index {
-	order := []int{tag, tag & 8, tag & 4, tag & 2, tag & 1, 0}
-	for _, candidate := range order {
+	fallbacks := [6]int{tag}
+	n := 1
+	for _, bit := range [4]int{8, 4, 2, 1} {
+		candidate := tag & bit
+		if candidate != 0 {
+			fallbacks[n] = candidate
+			n++
+		}
+	}
+	fallbacks[n] = 0
+	for _, candidate := range fallbacks[:n+1] {
 		if candidate >= 0 && candidate < len(s.parts) && s.parts[candidate] != nil {
 			return s.parts[candidate]
 		}
@@ -250,14 +260,16 @@ func (ix *Index) Search(q *[16]int16) uint8 {
 		}
 	}
 
-	probeClusters(ProbeLimit)
+	// Phase 1: short probe budget that quickly prunes obvious misses.
+	probeClusters(initialProbeBudget)
 
 	fraudCount := uint8(0)
 	for _, label := range top.label {
 		fraudCount += label
 	}
 	if fraudCount > 0 && fraudCount < 5 {
-		repairBudget := ix.clusters / 8
+		// Phase 2: only expand with partition size, never to a full sweep.
+		repairBudget := ix.clusters / repairProbeDivisor
 		if repairBudget < 1 {
 			repairBudget = 1
 		}
