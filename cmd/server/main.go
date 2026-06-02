@@ -265,6 +265,7 @@ func handleCtrlEvent() {
 			unix.Close(fd)
 			continue
 		}
+		unix.SetNonblock(fd, true)
 		unix.SetsockoptInt(fd, unix.SOL_TCP, unix.TCP_NODELAY, 1)
 		unix.SetsockoptInt(fd, unix.SOL_TCP, unix.TCP_QUICKACK, 1)
 		states[fd].pos = 0

@@ -133,34 +133,23 @@ func (ix *IvfIndex) searchCore(q *[16]int16, maxProbes int, topkK *[5]int64, top
 	*topkL = [5]uint8{}
 	worstKey := maxI64
 
-	probe := 0
-	repairDone := false
-	for {
-		for probe < maxProbes {
-			best := maxI64
-			for c := 0; c < ix.NClusters; c++ {
-				if packed[c] < best {
-					best = packed[c]
-				}
+	for probe := 0; probe < maxProbes; probe++ {
+		best := maxI64
+		for c := 0; c < ix.NClusters; c++ {
+			if packed[c] < best {
+				best = packed[c]
 			}
-			if best == maxI64 {
-				break
-			}
-			bestLb := best >> CidBits
-			if (bestLb << IdxBits) >= worstKey {
-				break
-			}
-			bestC := int(best & CidMask)
-			packed[bestC] = maxI64
-			ix.scanCluster(bestC, &qp, topkK, topkL, &worstKey)
-			probe++
 		}
-
-		if repairDone {
-			return
+		if best == maxI64 {
+			break
 		}
-		repairDone = true
-		maxProbes = ix.NClusters
+		bestLb := best >> CidBits
+		if (bestLb << IdxBits) >= worstKey {
+			break
+		}
+		bestC := int(best & CidMask)
+		packed[bestC] = maxI64
+		ix.scanCluster(bestC, &qp, topkK, topkL, &worstKey)
 	}
 }
 
