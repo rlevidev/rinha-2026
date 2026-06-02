@@ -268,29 +268,3 @@ func (s *psr) resolveKnownMerchant(r *Request) {
 		}
 	}
 }
-
-func (s *psr) nextKey() (key []byte, more bool, ok bool) {
-	s.ws()
-	if s.p >= s.end {
-		return nil, false, false
-	}
-	if s.b[s.p] == '}' {
-		s.p++
-		return nil, false, true
-	}
-	if s.b[s.p] == ',' {
-		s.p++
-	}
-	s.ws()
-	cs, ce, ok2 := s.skipString()
-	if !ok2 {
-		return nil, false, false
-	}
-	s.ws()
-	if s.p >= s.end || s.b[s.p] != ':' {
-		return nil, false, false
-	}
-	s.p++
-	s.ws()
-	return s.b[cs:ce], true, true
-}

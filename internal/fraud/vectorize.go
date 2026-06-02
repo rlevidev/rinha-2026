@@ -21,9 +21,13 @@ func Vectorize(r *Request) [16]int16 {
 	ts := r.TS
 	daysSince := ts / 86400
 	wd := (daysSince + 3) % 7
-	wd = (wd + 7) % 7
+	if wd < 0 {
+		wd += 7
+	}
 	hour := (ts / 3600) % 24
-	hour = (hour + 24) % 24
+	if hour < 0 {
+		hour += 24
+	}
 	v[3] = clamp01I16(float64(hour) / 23.0)
 	v[4] = clamp01I16(float64(wd) / 6.0)
 	if r.HasLastTx {
