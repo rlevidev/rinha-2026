@@ -1,6 +1,7 @@
 services:
   lb:
     build: .
+    image: ghcr.io/rlevidev/rinha-2026:latest
     # Ensure platform compatibility for linux/amd64
     platform: linux/amd64
     # Command to start the load balancer: /lb <tcp_port> <socket1> <socket2>
@@ -24,6 +25,7 @@ services:
 
   api1:
     build: .
+    image: ghcr.io/rlevidev/rinha-2026:latest
     platform: linux/amd64
     # Command to start the API worker: /server <unix_socket_path> <index_dir>
     command: ["/server", "/sockets/api1.sock", "/index"]
@@ -37,6 +39,7 @@ services:
 
   api2:
     build: .
+    image: ghcr.io/rlevidev/rinha-2026:latest
     platform: linux/amd64
     command: ["/server", "/sockets/api2.sock", "/index"]
     volumes:
