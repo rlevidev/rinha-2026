@@ -1,0 +1,8 @@
+=== RUN   TestLoadSetAndSearch
+--- PASS: TestLoadSetAndSearch (3.22s)
+=== RUN   TestPartitionFallbackOrder
+--- PASS: TestPartitionFallbackOrder (0.00s)
+=== RUN   TestSearchKeepsBoundedProbeBudget
+--- PASS: TestSearchKeepsBoundedProbeBudget (0.00s)
+PASS
+ok  	github.com/rlevidev/rinha-2026/internal/index	3.228s

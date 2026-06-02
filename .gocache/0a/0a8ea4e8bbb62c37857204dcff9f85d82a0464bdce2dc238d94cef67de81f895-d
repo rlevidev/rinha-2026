@@ -1,0 +1,8 @@
+=== RUN   TestServeConnFraudScore
+--- PASS: TestServeConnFraudScore (3.22s)
+=== RUN   TestServeConnReady
+--- PASS: TestServeConnReady (0.00s)
+=== RUN   TestServeConnBadRequestFallsBack
+--- PASS: TestServeConnBadRequestFallsBack (0.00s)
+PASS
+ok  	github.com/rlevidev/rinha-2026/internal/httpx	3.225s

@@ -1,0 +1,4 @@
+=== RUN   TestPickBackendAlternates
+--- PASS: TestPickBackendAlternates (0.00s)
+PASS
+ok  	github.com/rlevidev/rinha-2026/internal/lb	0.004s
