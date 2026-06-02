@@ -1,10 +1,21 @@
-FROM golang:1.26-alpine AS builder
+FROM golang:1.26.3 AS build
+
 WORKDIR /app
+ENV GOEXPERIMENT=simd CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v3
+
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /bin/server ./cmd/server
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /bin/lb ./cmd/lb
-FROM scratch
-COPY --from=builder /bin/server /server
-COPY --from=builder /bin/lb /lb
+
+COPY cmd/ ./cmd/
+COPY internal/ ./internal/
+
+RUN go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server
+RUN go build -trimpath -ldflags="-s -w" -o /out/lb ./cmd/lb
+
+FROM gcr.io/distroless/static-debian12:nonroot
+
+COPY --from=build /out/server /server
+COPY --from=build /out/lb /lb
+COPY index/ /index/
+
+EXPOSE 9999
