@@ -119,10 +119,11 @@ func handleRequest(req []byte, bodyOff int) []byte {
 	return errResp
 }
 
+type schedParam struct{ priority int32 }
+
 func setRealtimePriority() {
-	// best-effort; containers may lack CAP_SYS_NICE
-	attr := unix.SchedAttr{Size: unix.SizeofSchedAttr, Policy: unix.SCHED_FIFO, Priority: workerRTPri}
-	unix.SchedSetAttr(0, &attr, 0)
+	p := schedParam{priority: workerRTPri}
+	unix.Syscall(unix.SYS_SCHED_SETSCHEDULER, 0, uintptr(schedFIFO), uintptr(unsafe.Pointer(&p)))
 }
 
 func closeClient(fd int) {
