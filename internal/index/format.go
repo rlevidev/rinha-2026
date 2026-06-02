@@ -18,7 +18,7 @@ const (
 	IdxBits       = 22
 	CidBits       = 12
 	CidMask       = 0xFFF
-	NProbeInitial = 128
+	NProbeInitial = 12
 	IdxMask       = (1 << IdxBits) - 1
 
 	magic = "RNH4-IDX"
