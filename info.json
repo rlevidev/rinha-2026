@@ -1,8 +1,0 @@
-{
-  "participants": ["Rlevidev (adapted from Vinicius Piassa)"],
-  "social": ["https://github.com/rlevidev"],
-  "source-code-repo": "https://github.com/rlevidev/rinha-2026",
-  "original-work": "https://github.com/vinicius-piassa/rinha-backend-2026-go",
-  "stack": ["go 1.26.3", "GOEXPERIMENT=simd / archsimd (AVX2)", "Linux epoll + SCM_RIGHTS", "no-cgo", "no-framework"],
-  "open_to_work": false
-}
