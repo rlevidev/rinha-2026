@@ -393,18 +393,33 @@ func ParseRequest(body []byte, r *Request) bool {
 }
 
 func (s *psr) resolveKnownMerchant(r *Request) {
-    if s.kmEnd <= s.kmStart || s.midLen <= 0 || s.midLen >= 256 { return }
-    arr := s.b[s.kmStart:s.kmEnd]
-    id := s.b[s.midStart:s.midStart+s.midLen]
-    last := len(arr) - (s.midLen + 2)
-    for i := 0; i <= last; i++ {
-        if arr[i] != '"' || arr[i+s.midLen+1] != '"' { continue }
-        match := true
-        for k := 0; k < s.midLen; k++ {
-            if arr[i+1+k] != id[k] { match = false; break }
-        }
-        if match { r.KnownMerchant = true; return }
-    }
+	if s.kmEnd <= s.kmStart || s.midLen <= 0 || s.midLen >= 256 { return }
+	arr := s.b[s.kmStart:s.kmEnd]
+	id := s.b[s.midStart:s.midStart+s.midLen]
+	last := len(arr) - (s.midLen + 2)
+	for i := 0; i <= last; i++ {
+		if arr[i] != '"' || arr[i+s.midLen+1] != '"' { continue }
+		match := true
+		for k := 0; k < s.midLen; k++ {
+			if arr[i+1+k] != id[k] { match = false; break }
+		}
+		if match { r.KnownMerchant = true; return }
+	}
+}
+
+func (s *psr) nextKey() (key []byte, more bool, ok bool) {
+	s.ws()
+	if s.p >= s.end { return nil, false, false }
+	if s.b[s.p] == '}' { s.p++; return nil, false, true }
+	if s.b[s.p] == ',' { s.p++ }
+	s.ws()
+	cs, ce, ok2 := s.skipString()
+	if !ok2 { return nil, false, false }
+	s.ws()
+	if s.p >= s.end || s.b[s.p] != ':' { return nil, false, false }
+	s.p++
+	s.ws()
+	return s.b[cs:ce], true, true
 }
 ```
 
