@@ -13,7 +13,7 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       packages: write
 
     steps:
@@ -27,6 +27,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Short SHA
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -34,6 +38,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest
+            type=raw,value=${{ steps.sha.outputs.short }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -42,3 +47,15 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Update submission branch compose
+        run: |
+          SHORT="${{ steps.sha.outputs.short }}"
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${SHORT}"
+          git fetch origin submission
+          git checkout submission
+          sed -i "s|image:.*rinha-2026:.*|image: ${IMAGE}|" docker-compose.yml
+          git add docker-compose.yml
+          git -c user.name="CI" -c user.email="ci@rlevidev.dev" \
+            commit -m "auto: update image tag to ${SHORT}"
+          git push origin submission
