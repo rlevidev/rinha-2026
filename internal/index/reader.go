@@ -150,7 +150,3 @@ func (ix *IvfIndex) buildBPSOA() {
 		}
 	}
 }
-
-func (ix *IvfIndex) Search(q *[16]int16) uint8 {
-	return bruteForceSearch(ix, q)
-}

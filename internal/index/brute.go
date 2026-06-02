@@ -35,7 +35,7 @@ func bruteForceSearch(ix *IvfIndex, q *[16]int16) uint8 {
 		if k == maxKey {
 			continue
 		}
-		idx := int(k & CidMask)
+		idx := int(k & IdxMask)
 		cnt += ix.labels[idx]
 	}
 	return cnt
