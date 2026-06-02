@@ -83,7 +83,7 @@ func main() {
 
 func loadConfig() error {
 	// Load mcc_risk.json
-	mccRiskBytes, err := os.ReadFile("resources/mcc_risk.json")
+	mccRiskBytes, err := os.ReadFile("/resources/mcc_risk.json")
 	if err != nil {
 		return fmt.Errorf("error reading mcc_risk.json: %w", err)
 	}
@@ -92,7 +92,7 @@ func loadConfig() error {
 	}
 
 	// Load normalization.json
-	normalizationBytes, err := os.ReadFile("resources/normalization.json")
+	normalizationBytes, err := os.ReadFile("/resources/normalization.json")
 	if err != nil {
 		return fmt.Errorf("error reading normalization.json: %w", err)
 	}
