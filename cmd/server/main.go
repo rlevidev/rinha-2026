@@ -352,6 +352,7 @@ func main() {
 		die("error: bind_control_uds failed: " + err.Error())
 	}
 	ctrlFD = cfd
+	unix.SetsockoptInt(ctrlFD, unix.SOL_SOCKET, unix.SO_RCVBUF, 1<<20)
 	unix.SetNonblock(ctrlFD, true)
 
 	epollFD, err = unix.EpollCreate1(unix.EPOLL_CLOEXEC)

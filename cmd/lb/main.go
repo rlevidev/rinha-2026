@@ -151,6 +151,7 @@ func main() {
 		if bfd < 0 {
 			die("lb: backend connect failed (gave up): " + p)
 		}
+		unix.SetsockoptInt(bfd, unix.SOL_SOCKET, unix.SO_SNDBUF, 1<<20)
 		backendsFD = append(backendsFD, bfd)
 	}
 
