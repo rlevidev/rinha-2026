@@ -1,4 +1,5 @@
 package main
+
 import (
 	"bufio"
 	"encoding/json"
@@ -21,14 +22,14 @@ var (
 	indexLoaded       bool
 )
 
-// Pre-rendered responses to avoid fmt.Sprintf or json.Marshal in the hot path
-var responses = [6][]byte{
-	[]byte(`{"approved":true,"fraud_score":0.0}`),
-	[]byte(`{"approved":true,"fraud_score":0.2}`),
-	[]byte(`{"approved":true,"fraud_score":0.4}`),
-	[]byte(`{"approved":false,"fraud_score":0.6}`),
-	[]byte(`{"approved":false,"fraud_score":0.8}`),
-	[]byte(`{"approved":false,"fraud_score":1.0}`),
+// Pre-rendered full HTTP responses to avoid overhead in the hot path
+var fullResponses = [6][]byte{
+	[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}"),
+	[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.2}"),
+	[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.4}"),
+	[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":0.6}"),
+	[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":0.8}"),
+	[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":1.0}"),
 }
 
 func main() {
@@ -243,35 +244,29 @@ func handleFraudScore(conn net.Conn, req *http.Request) {
 		// Approved
 		switch fraudCount {
 		case 0:
-			responseBytes = responses[0] // 0.0
+			responseBytes = fullResponses[0] // 0.0
 		case 1:
-			responseBytes = responses[1] // 0.2
+			responseBytes = fullResponses[1] // 0.2
 		case 2:
-			responseBytes = responses[2] // 0.4
+			responseBytes = fullResponses[2] // 0.4
 		default:
-			// Should not happen for fraudScore < FraudThreshold (0.6)
-			// If fraudCount is 3, score is 0.6, so it would be !approved
-			// But for safety, send a default approved response
-			responseBytes = responses[0] // Fallback to 0.0
+			responseBytes = fullResponses[0] // Fallback
 		}
 	} else {
 		// Not approved
 		switch fraudCount {
 		case 3:
-			responseBytes = responses[3] // 0.6
+			responseBytes = fullResponses[3] // 0.6
 		case 4:
-			responseBytes = responses[4] // 0.8
+			responseBytes = fullResponses[4] // 0.8
 		case 5:
-			responseBytes = responses[5] // 1.0
+			responseBytes = fullResponses[5] // 1.0
 		default:
-			// Should not happen for fraudScore >= FraudThreshold (0.6)
-			// If fraudCount is 0,1,2, score is < 0.6, so it would be approved
-			// But for safety, send a default not approved response
-			responseBytes = responses[5] // Fallback to 1.0
+			responseBytes = fullResponses[5] // Fallback
 		}
 	}
 
-	sendResponse(conn, http.StatusOK, responseBytes)
+	conn.Write(responseBytes)
 }
 
 func sendResponse(conn net.Conn, statusCode int, body []byte) {
@@ -296,5 +291,5 @@ func sendResponse(conn net.Conn, statusCode int, body []byte) {
 func sendDefaultFraudResponse(conn net.Conn) {
 	// "approved":true,"fraud_score":0.0 corresponds to fraudCount = 0 or 1 or 2 with fraudScore < 0.6.
 	// We want to return { "approved": true, "fraud_score": 0.0 } as per plan: "It is better a false positive than a HTTP error."
-	sendResponse(conn, http.StatusOK, responses[0])
+	conn.Write(fullResponses[0])
 }

@@ -8,13 +8,12 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 )
 
 const (
-	vectorSize      = 14
-	entrySizeBytes  = vectorSize*2 + 1 // 14 int16 (2 bytes each) + 1 byte for label
-	NumNearest      = 5                // K for KNN (exported for use by other packages)
+	vectorSize     = 14
+	entrySizeBytes = vectorSize*2 + 1 // 14 int16 (2 bytes each) + 1 byte for label
+	NumNearest     = 5                // K for KNN (exported for use by other packages)
 	FraudThreshold = 0.6              // For fraud_score calculation (exported for use by other packages)
 )
 
@@ -98,12 +97,6 @@ func LoadSet(dir string) (*Set, error) {
 	return set, nil
 }
 
-// SearchResult represents a single nearest neighbor with its distance and fraud status
-type SearchResult struct {
-	Distance int64 // Squared Euclidean distance
-	Fraud    bool
-}
-
 // Search searches for the K nearest neighbors and returns the count of frauds (0-K)
 // tag is the 4-bit value calculated for the query
 func (s *Set) Search(queryVector [vectorSize]float32, tag uint8) uint8 {
@@ -115,32 +108,44 @@ func (s *Set) Search(queryVector [vectorSize]float32, tag uint8) uint8 {
 	// Quantize the query vector
 	quantizedQuery := quantize(queryVector)
 
-	// Use a min-heap to keep track of the K nearest neighbors
-	// We'll use a slice and sort it as we add, which is simpler than a heap
-	// for a small K (NumNearest)
-	nearestNeighbors := make([]SearchResult, 0, NumNearest)
+	// Keep track of the K nearest neighbors using fixed-size arrays
+	// This avoids heap allocations and reflection (sort.Slice) in the hot path.
+	var (
+		maxDistances [NumNearest]int64
+		isFraud      [NumNearest]bool
+		count        int
+	)
 
-	for _, entry := range partition.entries {
+	// Initialize distances to max
+	for i := 0; i < NumNearest; i++ {
+		maxDistances[i] = math.MaxInt64
+	}
+
+	for i := range partition.entries {
+		entry := &partition.entries[i]
 		dist := squaredEuclideanDistance(quantizedQuery, entry.Vec)
 
-		if len(nearestNeighbors) < NumNearest {
-			nearestNeighbors = append(nearestNeighbors, SearchResult{Distance: dist, Fraud: entry.Fraud})
-			// Keep sorted to easily identify the largest distance for replacement
-			sort.Slice(nearestNeighbors, func(i, j int) bool {
-				return nearestNeighbors[i].Distance < nearestNeighbors[j].Distance
-			})
-		} else if dist < nearestNeighbors[NumNearest-1].Distance {
-			// Replace the farthest neighbor if current distance is smaller
-			nearestNeighbors[NumNearest-1] = SearchResult{Distance: dist, Fraud: entry.Fraud}
-			sort.Slice(nearestNeighbors, func(i, j int) bool {
-				return nearestNeighbors[i].Distance < nearestNeighbors[j].Distance
-			})
+		// If this entry is closer than the farthest of our current top-K
+		if dist < maxDistances[NumNearest-1] {
+			// Replace the farthest neighbor
+			maxDistances[NumNearest-1] = dist
+			isFraud[NumNearest-1] = entry.Fraud
+
+			// Re-sort the small array (Insertion Sort)
+			for j := NumNearest - 1; j > 0 && maxDistances[j] < maxDistances[j-1]; j-- {
+				maxDistances[j], maxDistances[j-1] = maxDistances[j-1], maxDistances[j]
+				isFraud[j], isFraud[j-1] = isFraud[j-1], isFraud[j]
+			}
+			if count < NumNearest {
+				count++
+			}
 		}
 	}
 
 	fraudCount := uint8(0)
-	for _, res := range nearestNeighbors {
-		if res.Fraud {
+	// Only count neighbors that were actually found (in case partition < K)
+	for i := 0; i < count; i++ {
+		if isFraud[i] {
 			fraudCount++
 		}
 	}
