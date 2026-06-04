@@ -17,6 +17,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history to ensure we can switch branches
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -43,11 +45,81 @@ jobs:
         run: |
           SHORT="${{ steps.sha.outputs.short }}"
           IMAGE="ghcr.io/${{ github.repository }}:${SHORT}"
-          git fetch origin submission || git checkout -b submission
+          
+          # Configure git
+          git config user.name "CI"
+          git config user.email "ci@bot.dev"
+          
+          # Try to switch to submission branch, create if not exists
+          git fetch origin submission || git checkout --orphan submission
           git checkout submission
-          # Use | as separator to avoid issues with / in registry URL
+
+          # Remove all files from main that were carried over if it's a new orphan branch
+          # This should only happen the first time
+          if [ "$(git rev-list --count submission ^main)" = "0" ]; then
+            git rm -rf . || true # Ignore errors if already empty
+          fi
+          
+          # Create docker-compose.yml if it doesn't exist
+          if [ ! -f docker-compose.yml ]; then
+            cat > docker-compose.yml << EOF
+services:
+  lb:
+    image: ${IMAGE}
+    command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
+    ports:
+      - "9999:9999"
+    volumes:
+      - sockets:/sockets
+    depends_on:
+      - api1
+      - api2
+    deploy:
+      resources:
+        limits:
+          cpus: "0.05"
+          memory: "8MB"
+
+  api1:
+    image: ${IMAGE}
+    command: ["/server", "/sockets/api1.sock", "/index"]
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.475"
+          memory: "171MB"
+
+  api2:
+    image: ${IMAGE}
+    command: ["/server", "/sockets/api2.sock", "/index"]
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.475"
+          memory: "171MB"
+
+volumes:
+  sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=4m,mode=0777
+EOF
+          fi
+
+          # Ensure info.json exists (should have been maintained or copied)
+          if [ ! -f info.json ]; then
+            echo '{"participants": ["rlevidev"], "social": ["https://github.com/rlevidev"], "source-code-repo": "https://github.com/rlevidev/rinha-2026", "stack": ["go", "docker"], "open_to_work": true}' > info.json
+          fi
+          
+          # Update the image tag
           sed -i "s|image:.*|image: ${IMAGE}|g" docker-compose.yml
-          git add docker-compose.yml
-          git -c user.name="CI" -c user.email="ci@bot.dev" \
-            commit -m "auto: update image to ${SHORT}" || true
+          
+          git add docker-compose.yml info.json
+          git commit -m "auto: update image to ${SHORT}" || true
           git push origin submission
