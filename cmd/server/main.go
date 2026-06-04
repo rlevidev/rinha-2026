@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -131,6 +130,9 @@ func handler(w http.ResponseWriter, r *http.Request) {
 		vec := vectorize.Vectorize(tx, mccRisk)
 		tag := calculateTag(vec)
 		score := idx.Search(vec, tag)
+		if score >= 6 {
+			score = 5 // Safety cap
+		}
 
 		w.Write(responses[score])
 		return

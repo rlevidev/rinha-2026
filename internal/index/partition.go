@@ -36,7 +36,7 @@ func (h *MaxHeap) Pop() any {
 	return x
 }
 
-func NewSet(dir string) (*Set, error) {
+func LoadSet(dir string) (*Set, error) {
 	s := &Set{partitions: make(map[uint8]*Partition)}
 	for i := 0; i < 16; i++ {
 		fName := fmt.Sprintf("%s/partition_%d.bin", dir, i)
@@ -44,10 +44,10 @@ func NewSet(dir string) (*Set, error) {
 		if err != nil {
 			continue
 		}
-		defer f.Close()
-
+		
 		info, err := f.Stat()
 		if err != nil {
+			f.Close()
 			return nil, err
 		}
 		
@@ -61,11 +61,17 @@ func NewSet(dir string) (*Set, error) {
 			}
 			binary.Read(f, binary.LittleEndian, &labels[j])
 		}
+		f.Close()
 		
 		s.partitions[uint8(i)] = &Partition{data: data, labels: labels, size: size}
 	}
 	return s, nil
 }
+
+func NewSet(dir string) (*Set, error) {
+	return LoadSet(dir)
+}
+
 
 func (s *Set) Search(query [14]float32, tag uint8) uint8 {
 	p := s.findPartition(tag)

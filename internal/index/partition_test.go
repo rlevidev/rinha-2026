@@ -18,8 +18,8 @@ func TestSearch(t *testing.T) {
 	}
 	query := [14]float32{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}
 	res := s.Search(query, 0)
-	if len(res) == 0 || res[0] != 0 {
-		t.Errorf("Expected ID 0, got %v", res)
+	if res != 0 {
+		t.Errorf("Expected fraud count 0, got %d", res)
 	}
 }
 
@@ -46,9 +46,9 @@ func TestRoundTrip(t *testing.T) {
 
 func TestContagem0(t *testing.T) {
 	s := &Set{partitions: make(map[uint8]*Partition)}
-	// Should fallback to any existing partition, if none, nil
+	// Should fallback to any existing partition, if none, returns 0
 	res := s.Search([14]float32{}, 1)
-	if res != nil {
-		t.Errorf("Expected nil, got %v", res)
+	if res != 0 {
+		t.Errorf("Expected 0, got %d", res)
 	}
 }
