@@ -1,23 +1,41 @@
 services:
-  api1:
-    image: ghcr.io/rlevidev/rinha-2026:dafb493
-    command: ["/app/server", "/sockets/api1.sock", "/index"]
-    volumes:
-      - sockets:/sockets
-  api2:
-    image: ghcr.io/rlevidev/rinha-2026:dafb493
-    command: ["/app/server", "/sockets/api2.sock", "/index"]
-    volumes:
-      - sockets:/sockets
-  nginx:
-    image: nginx:latest
+  lb:
+    image: ghcr.io/rlevidev/rinha-2026:b43ee0a
+    command: ["/app/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
     ports:
       - "9999:9999"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - sockets:/sockets
     depends_on:
       - api1
       - api2
+    deploy:
+      resources:
+        limits:
+          cpus: "0.05"
+          memory: "8MB"
+
+  api1:
+    image: ghcr.io/rlevidev/rinha-2026:b43ee0a
+    command: ["/app/server", "/sockets/api1.sock", "/index"]
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.475"
+          memory: "171MB"
+
+  api2:
+    image: ghcr.io/rlevidev/rinha-2026:b43ee0a
+    command: ["/app/server", "/sockets/api2.sock", "/index"]
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.475"
+          memory: "171MB"
 
 volumes:
   sockets:
