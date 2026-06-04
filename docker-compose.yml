@@ -1,10 +1,10 @@
 services:
   api1:
-    image: ghcr.io/rlevidev/rinha-2026:latest
+    image: ghcr.io/rlevidev/rinha-2026:d40c323
   api2:
-    image: ghcr.io/rlevidev/rinha-2026:latest
+    image: ghcr.io/rlevidev/rinha-2026:d40c323
   nginx:
-    image: nginx:latest
+    image: ghcr.io/rlevidev/rinha-2026:d40c323
     ports:
       - "9999:9999"
     volumes:
