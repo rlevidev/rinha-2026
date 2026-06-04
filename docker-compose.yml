@@ -1,11 +1,11 @@
 services:
   api1:
-    image: ghcr.io/rlevidev/rinha-2026:39ec062
+    image: ghcr.io/rlevidev/rinha-2026:dafb493
     command: ["/app/server", "/sockets/api1.sock", "/index"]
     volumes:
       - sockets:/sockets
   api2:
-    image: ghcr.io/rlevidev/rinha-2026:39ec062
+    image: ghcr.io/rlevidev/rinha-2026:dafb493
     command: ["/app/server", "/sockets/api2.sock", "/index"]
     volumes:
       - sockets:/sockets
