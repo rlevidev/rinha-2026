@@ -6,7 +6,7 @@ COPY . .
 # Gerar índice no diretório /app/index
 RUN mkdir -p /app/index && go run ./cmd/build_index/ resources/references.json.gz /app/index
 # Compilar binários
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/server ./cmd/server
+RUN mkdir -p /out && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/server ./cmd/server
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/lb ./cmd/lb
 
 FROM gcr.io/distroless/static-debian12:nonroot
