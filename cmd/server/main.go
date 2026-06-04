@@ -38,9 +38,9 @@ func main() {
 	}
 
 	// Load mcc_risk
-	mccRiskFile, err := os.ReadFile("resources/mcc_risk.json")
+	mccRiskFile, err := os.ReadFile("/resources/mcc_risk.json")
 	if err != nil {
-		log.Fatalf("Failed to load mcc_risk.json: %v", err)
+		log.Fatalf("Failed to load /resources/mcc_risk.json: %v", err)
 	}
 	var mccRisk vectorize.MCCRisk
 	if err := json.Unmarshal(mccRiskFile, &mccRisk); err != nil {
