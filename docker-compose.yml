@@ -1,54 +1,55 @@
 services:
   lb:
     build: .
-    image: ghcr.io/rlevidev/rinha-2026:latest
-    # Ensure platform compatibility for linux/amd64
-    platform: linux/amd64
-    # Command to start the load balancer: /lb <tcp_port> <socket1> <socket2>
-    command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
-    # Map container port 9999 to host port 9999
-    ports:
-      - "9999:9999"
-    # Mount the tmpfs volume for Unix sockets
-    volumes:
-      - sockets:/sockets
-    # Ensure API workers start before the load balancer
-    depends_on:
-      - api1
-      - api2
-    # Resource limits as per plan
-    deploy:
-      resources:
-        limits:
-          cpus: "0.05"
-          memory: "8MB"
+    lb:
+      image: ghcr.io/rlevidev/rinha-2026:latest
+      # Ensure platform compatibility for linux/amd64
+      platform: linux/amd64
+      # Command to start the load balancer: /usr/bin/lb <tcp_port> <socket1> <socket2>
+      command: ["/usr/bin/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
+      # Map container port 9999 to host port 9999
+      ports:
+        - "9999:9999"
+      # Mount the tmpfs volume for Unix sockets
+      volumes:
+        - sockets:/sockets
+      # Ensure API workers start before the load balancer
+      depends_on:
+        - api1
+        - api2
+      # Resource limits as per plan
+      deploy:
+        resources:
+          limits:
+            cpus: "0.05"
+            memory: "8MB"
 
-  api1:
-    build: .
-    image: ghcr.io/rlevidev/rinha-2026:latest
-    platform: linux/amd64
-    # Command to start the API worker: /server <unix_socket_path> <index_dir>
-    command: ["/server", "/sockets/api1.sock", "/index"]
-    volumes:
-      - sockets:/sockets
-    deploy:
-      resources:
-        limits:
-          cpus: "0.475"
-          memory: "171MB"
+    api1:
+      image: ghcr.io/rlevidev/rinha-2026:latest
+      platform: linux/amd64
+      # Command to start the API worker: /usr/bin/server <unix_socket_path> <index_dir>
+      command: ["/usr/bin/server", "/sockets/api1.sock", "/index"]
+      volumes:
+        - sockets:/sockets
+      deploy:
+        resources:
+          limits:
+            cpus: "0.475"
+            memory: "171MB"
 
-  api2:
-    build: .
-    image: ghcr.io/rlevidev/rinha-2026:latest
-    platform: linux/amd64
-    command: ["/server", "/sockets/api2.sock", "/index"]
-    volumes:
-      - sockets:/sockets
-    deploy:
-      resources:
-        limits:
-          cpus: "0.475"
-          memory: "171MB"
+    api2:
+      image: ghcr.io/rlevidev/rinha-2026:latest
+      platform: linux/amd64
+      # Command to start the API worker: /usr/bin/server <unix_socket_path> <index_dir>
+      command: ["/usr/bin/server", "/sockets/api2.sock", "/index"]
+      volumes:
+        - sockets:/sockets
+      deploy:
+        resources:
+          limits:
+            cpus: "0.475"
+            memory: "171MB"
+
 
 # Define the tmpfs volume for inter-service communication via Unix sockets
 volumes:

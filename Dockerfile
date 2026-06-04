@@ -11,8 +11,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /build/lb ./cmd/lb
 
 FROM gcr.io/distroless/static-debian12:nonroot
 # Copy from /build, ensure destination paths match expected app paths
-COPY --from=builder /build/server /server
-COPY --from=builder /build/lb /lb
+COPY --from=builder /build/server /usr/bin/server
+COPY --from=builder /build/lb /usr/bin/lb
 COPY --from=builder /build/index /index
 COPY resources/mcc_risk.json /resources/mcc_risk.json
 COPY resources/normalization.json /resources/normalization.json
