@@ -1,3 +1,3 @@
-module rinha-2026
+module github.com/rlevidev/rinha-2026
 
-go 1.22
+go 1.26
