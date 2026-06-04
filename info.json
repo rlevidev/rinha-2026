@@ -1,7 +1,13 @@
 {
-  "participants": ["rlevidev"],
-  "social": ["https://github.com/rlevidev"],
+  "participants": ["Levi"],
+  "social": [
+    "https://github.com/rlevidev"
+  ],
   "source-code-repo": "https://github.com/rlevidev/rinha-2026",
-  "stack": ["go", "docker"],
+  "stack": [
+    "go",
+    "postgres",
+    "nginx"
+  ],
   "open_to_work": true
 }
