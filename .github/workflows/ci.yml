@@ -52,21 +52,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: submission
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Update docker-compose.yml
         env:
           SHA_SHORT: ${{ needs.build-and-push.outputs.sha_short }}
+          REPO: ${{ github.repository }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Create/update docker-compose.yml
-          cat \<<EOF > docker-compose.yml
+          cat <<EOF > docker-compose.yml
 services:
   api1:
-    image: ghcr.io/${{ github.repository }}:${{ env.SHA_SHORT }}
+    image: ghcr.io/${REPO}:${SHA_SHORT}
   api2:
-    image: ghcr.io/${{ github.repository }}:${{ env.SHA_SHORT }}
+    image: ghcr.io/${REPO}:${SHA_SHORT}
   nginx:
     image: nginx:latest
     ports:
@@ -80,6 +82,8 @@ EOF
 
           if ! git diff --quiet; then
             git add docker-compose.yml
-            git commit -m "chore: update docker-compose.yml with image tag ${{ env.SHA_SHORT }}"
+            git commit -m "chore: update docker-compose.yml with image tag ${SHA_SHORT}"
             git push origin submission
+          else
+            echo "No changes to commit"
           fi
