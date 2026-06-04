@@ -1,105 +1,60 @@
 package main
 
 import (
-	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
-	"strconv"
 	"sync/atomic"
 	"time"
 )
 
+var counter uint64
+
 func main() {
 	if len(os.Args) < 3 {
-		log.Fatalf("Usage: %s <tcp_port> <socket1> [socket2 ...]", os.Args[0])
+		panic("usage: lb <port> <socket1> [socket2...]")
 	}
+	port := os.Args[1]
+	workers := os.Args[2:]
 
-	tcpPortStr := os.Args[1]
-	unixSocketPaths := os.Args[2:]
-
-	tcpPort, err := strconv.Atoi(tcpPortStr)
-	if err != nil {
-		log.Fatalf("Invalid TCP port: %v", err)
-	}
-
-	// Wait for workers to be available
-	waitForWorkers(unixSocketPaths)
-
-	log.Printf("Starting TCP listener on :%d", tcpPort)
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", tcpPort))
-	if err != nil {
-		log.Fatalf("Error listening on TCP port %d: %v", tcpPort, err)
-	}
-	defer listener.Close()
-
-	var nextWorkerIndex uint64
-
-	for {
-		clientConn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Error accepting client connection: %v", err)
-			continue
-		}
-
-		// Round-robin selection of worker
-		workerIdx := atomic.AddUint64(&nextWorkerIndex, 1) % uint64(len(unixSocketPaths))
-		workerSocketPath := unixSocketPaths[workerIdx]
-
-		go handleClient(clientConn, workerSocketPath)
-	}
-}
-
-func waitForWorkers(unixSocketPaths []string) {
-	const maxRetries = 60 // 30 seconds with 500ms sleep
-	const retryInterval = 500 * time.Millisecond
-
-	log.Println("Waiting for workers to be available...")
-	for _, socketPath := range unixSocketPaths {
-		for i := 0; i < maxRetries; i++ {
-			conn, err := net.Dial("unix", socketPath)
+	// Wait for workers
+	for _, w := range workers {
+		for i := 0; i < 30; i++ {
+			c, err := net.Dial("unix", w)
 			if err == nil {
-				conn.Close()
-				log.Printf("Worker %s is available.", socketPath)
+				c.Close()
 				break
 			}
-			if i == maxRetries-1 {
-				log.Fatalf("Worker %s not available after multiple retries: %v", socketPath, err)
-			}
-			time.Sleep(retryInterval)
+			time.Sleep(time.Second)
 		}
 	}
-	log.Println("All workers are available.")
+
+	l, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		panic(err)
+	}
+
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			continue
+		}
+		go handle(c, workers)
+	}
 }
 
-func handleClient(clientConn net.Conn, workerSocketPath string) {
-	defer clientConn.Close()
+func handle(client net.Conn, workers []string) {
+	defer client.Close()
 
-	workerConn, err := net.Dial("unix", workerSocketPath)
+	idx := atomic.AddUint64(&counter, 1) % uint64(len(workers))
+	worker, err := net.Dial("unix", workers[idx])
 	if err != nil {
-		log.Printf("Error connecting to worker %s: %v", workerSocketPath, err)
 		return
 	}
-	defer workerConn.Close()
+	defer worker.Close()
 
-	// Copy data bidirectionally
 	done := make(chan struct{}, 2)
-	go func() {
-		_, err := io.Copy(workerConn, clientConn)
-		if err != nil && err != io.EOF {
-			log.Printf("Error copying from client to worker: %v", err)
-		}
-		done <- struct{}{}
-	}()
-	go func() {
-		_, err := io.Copy(clientConn, workerConn)
-		if err != nil && err != io.EOF {
-			log.Printf("Error copying from worker to client: %v", err)
-		}
-		done <- struct{}{}
-	}()
-
-	<-done
+	go func() { io.Copy(worker, client); done <- struct{}{} }()
+	go func() { io.Copy(client, worker); done <- struct{}{} }()
 	<-done
 }

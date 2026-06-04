@@ -6,166 +6,117 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
-	"math"
 	"os"
-	"path/filepath"
 )
 
-// ReferenceEntry represents a single entry in the references.json.gz file
-type ReferenceEntry struct {
-	Vector [14]float32 `json:"vector"`
-	Label  string      `json:"label"`
-}
-
-// tag calculates the 4-bit tag for a given vector
-func tag(v [14]float32) uint8 {
-	t := uint8(0)
-	if v[5] != -1 {
-		t |= 1
-	} // has_last_tx (bit 0)
-	if v[11] > 0.5 {
-		t |= 2
-	} // unknown_merchant (bit 1)
-	if v[9] > 0.5 {
-		t |= 4
-	} // is_online (bit 2)
-	if v[10] > 0.5 {
-		t |= 8
-	} // card_present (bit 3)
-	return t
+type Record struct {
+	Vector []float32 `json:"vector"`
+	Label  string    `json:"label"`
 }
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Println("Usage: go run main.go <references.json.gz_path> <output_dir>")
-		os.Exit(1)
-	}
-
-	referencesPath := os.Args[1]
-	outputDir := os.Args[2]
-
-	err := os.MkdirAll(outputDir, 0755)
+	f, err := os.Open("resources/references.json.gz")
 	if err != nil {
-		fmt.Printf("Error creating output directory: %v\n", err)
-		os.Exit(1)
+		panic(err)
 	}
+	defer f.Close()
 
-	fmt.Printf("Reading references from %s and writing partitions to %s\n", referencesPath, outputDir)
-
-	file, err := os.Open(referencesPath)
+	gz, err := gzip.NewReader(f)
 	if err != nil {
-		fmt.Printf("Error opening references file: %v\n", err)
-		os.Exit(1)
+		panic(err)
 	}
-	defer file.Close()
+	defer gz.Close()
 
-	gzReader, err := gzip.NewReader(file)
-	if err != nil {
-		fmt.Printf("Error creating gzip reader: %v\n", err)
-		os.Exit(1)
-	}
-	defer gzReader.Close()
+	decoder := json.NewDecoder(gz)
 
-	// Using a bufio.Reader for efficient reading
-	reader := bufio.NewReader(gzReader)
-
-	// To handle the large JSON array, we'll read byte by byte
-	// until we find the start of the array '[', and then process objects.
-	// A simpler approach for now, assuming the file is a single JSON array of objects,
-	// is to use json.NewDecoder and read token by token.
-	decoder := json.NewDecoder(reader)
-
-	// Read the opening bracket of the JSON array
+	// Consume opening bracket '['
 	_, err = decoder.Token()
 	if err != nil {
-		fmt.Printf("Error reading JSON start token: %v\n", err)
-		os.Exit(1)
+		panic(err)
 	}
 
-	partitions := make(map[uint8][][]byte) // tag -> list of serialized entries
-	stats := make(map[uint8]int)           // tag -> count
+	stats := make(map[uint8]int)
+	writers := make(map[uint8]*bufio.Writer)
+	files := make(map[uint8]*os.File)
 
-	totalEntries := 0
+	defer func() {
+		for _, w := range writers {
+			w.Flush()
+		}
+		for _, f := range files {
+			f.Close()
+		}
+	}()
 
 	for decoder.More() {
-		var entry ReferenceEntry
-		err := decoder.Decode(&entry)
-		if err == io.EOF {
-			break
-		}
+		var r Record
+		err := decoder.Decode(&r)
 		if err != nil {
-			fmt.Printf("Error decoding JSON entry: %v\n", err)
-			os.Exit(1)
+			panic(err)
 		}
 
-		totalEntries++
+		// Compute bits
+		cardPresent := uint8(r.Vector[10])
+		isOnline := uint8(r.Vector[9])
+		unknownMerchant := uint8(r.Vector[11])
+		hasLastTx := uint8(0)
+		if r.Vector[5] != -1.0 {
+			hasLastTx = 1
+		}
 
-		// Calculate tag
-		t := tag(entry.Vector)
+		tag := (cardPresent << 3) | (isOnline << 2) | (unknownMerchant << 1) | hasLastTx
 
-		// Quantize vector and determine label byte
-		var quantizedVector [14]int16
-		for i, f := range entry.Vector {
-			if f == -1 {
-				quantizedVector[i] = -32767 // Sentinel for -1
-			} else {
-				// Clamp to [0, 1] then scale to [0, 32767] for int16
-				// The input floats from references.json.gz should already be within [0, 1]
-				// or -1 for specific dimensions.
-				clampedF := math.Min(1.0, math.Max(0.0, float64(f)))
-				quantizedVector[i] = int16(clampedF * 32767)
+		// Scale
+		scaled := make([]int16, 14)
+		for i, v := range r.Vector {
+			val := v * 32767
+			if val > 32767 {
+				val = 32767
+			} else if val < -32768 {
+				val = -32768
 			}
+			scaled[i] = int16(val)
 		}
 
-		labelByte := uint8(0)
-		if entry.Label == "fraud" {
-			labelByte = 1
+		// Label
+		var label uint8
+		if r.Label == "fraud" {
+			label = 1
+		} else {
+			label = 0
 		}
 
-		// Serialize to 29 bytes
-		buf := make([]byte, 29)
-		for i, val := range quantizedVector {
-			// Convert int16 to uint16 for binary.LittleEndian.PutUint16.
-			// This is safe as long as we read it back as int16 later.
-			binary.LittleEndian.PutUint16(buf[i*2:i*2+2], uint16(val)) 
-		}
-		buf[28] = labelByte
-
-		partitions[t] = append(partitions[t], buf)
-		stats[t]++
-	}
-
-	// Read the closing bracket of the JSON array
-	_, err = decoder.Token()
-	if err != nil && err != io.EOF {
-		fmt.Printf("Error reading JSON end token: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Processed %d total entries.\n", totalEntries)
-	fmt.Println("Writing partitioned index files...")
-
-	for t, serializedEntries := range partitions {
-		outputPath := filepath.Join(outputDir, fmt.Sprintf("partition_%d.bin", t))
-		outFile, err := os.Create(outputPath)
-		if err != nil {
-			fmt.Printf("Error creating partition file %s: %v\n", outputPath, err)
-			os.Exit(1)
-		}
-		defer outFile.Close()
-
-		writer := bufio.NewWriter(outFile)
-		for _, entryBytes := range serializedEntries {
-			_, err := writer.Write(entryBytes)
+		// Get or create writer
+		w, ok := writers[tag]
+		if !ok {
+			fName := fmt.Sprintf("index/partition_%d.bin", tag)
+			file, err := os.Create(fName)
 			if err != nil {
-				fmt.Printf("Error writing to partition file %s: %v\n", outputPath, err)
-				os.Exit(1)
+				panic(err)
+			}
+			files[tag] = file
+			w = bufio.NewWriter(file)
+			writers[tag] = w
+		}
+
+		// Write: 14 * int16 + 1 * uint8 = 29 bytes
+		for _, v := range scaled {
+			err = binary.Write(w, binary.LittleEndian, v)
+			if err != nil {
+				panic(err)
 			}
 		}
-		writer.Flush()
-		fmt.Printf("Wrote partition_%d.bin with %d entries.\n", t, stats[t])
+		err = binary.Write(w, binary.LittleEndian, label)
+		if err != nil {
+			panic(err)
+		}
+
+		stats[tag]++
 	}
 
-	fmt.Println("Done.")
+	// Stats
+	fmt.Println("Stats:")
+	for tag, count := range stats {
+		fmt.Printf("Partition %d: %d entries\n", tag, count)
+	}
 }
