@@ -8,11 +8,16 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      sha_short: ${{ steps.vars.outputs.SHA_SHORT }}
+    permissions:
+      contents: write
+      packages: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Needed to get full commit history for short SHA
+          fetch-depth: 0
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -37,23 +42,31 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Update submission branch
+  update-submission:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout submission branch
+        uses: actions/checkout@v4
+        with:
+          ref: submission
+
+      - name: Update docker-compose.yml
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA_SHORT: ${{ needs.build-and-push.outputs.sha_short }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git checkout submission
-          # Create or update docker-compose.yml
-          cat << EOF > docker-compose.yml
-version: '3.8'
+          
+          # Create/update docker-compose.yml
+          cat \<<EOF > docker-compose.yml
 services:
   api1:
-    image: ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.SHA_SHORT }}
-    # Add other service configurations as needed
+    image: ghcr.io/${{ github.repository }}:${{ env.SHA_SHORT }}
   api2:
-    image: ghcr.io/${{ github.repository }}:${{ steps.vars.outputs.SHA_SHORT }}
-    # Add other service configurations as needed
+    image: ghcr.io/${{ github.repository }}:${{ env.SHA_SHORT }}
   nginx:
     image: nginx:latest
     ports:
@@ -64,7 +77,9 @@ services:
       - api1
       - api2
 EOF
-          # Add other necessary files for submission branch
-          git add docker-compose.yml # Add other files as they are created
-          git commit -m "chore: update docker-compose.yml with image tag ${{ steps.vars.outputs.SHA_SHORT }}"
-          git push origin submission
+
+          if ! git diff --quiet; then
+            git add docker-compose.yml
+            git commit -m "chore: update docker-compose.yml with image tag ${{ env.SHA_SHORT }}"
+            git push origin submission
+          fi
