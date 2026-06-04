@@ -67,12 +67,12 @@ jobs:
 services:
   api1:
     image: ghcr.io/${REPO}:${SHA_SHORT}
-    command: ["/server", "/sockets/api1.sock", "/index"]
+    command: ["/app/server", "/sockets/api1.sock", "/index"]
     volumes:
       - sockets:/sockets
   api2:
     image: ghcr.io/${REPO}:${SHA_SHORT}
-    command: ["/server", "/sockets/api2.sock", "/index"]
+    command: ["/app/server", "/sockets/api2.sock", "/index"]
     volumes:
       - sockets:/sockets
   nginx:
