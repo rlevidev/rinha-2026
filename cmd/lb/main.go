@@ -1,77 +1,139 @@
 package main
 
 import (
-	"fmt"
+	"log"
 	"net"
 	"os"
-	"strconv"
-	"syscall"
+	"time"
+
 	"golang.org/x/sys/unix"
 )
 
 func main() {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: lb <port> <uds1> [uds2 ...]")
-		os.Exit(1)
+		log.Fatalf("Usage: %s <tcp_port> <uds_path1> [uds_path2 ...]", os.Args[0])
 	}
 
-	port := os.Args[1]
+	tcpPort := os.Args[1]
 	udsPaths := os.Args[2:]
 
-	ln, err := net.Listen("tcp", ":"+port)
-	if err != nil {
-		fmt.Printf("Listen TCP: %v\n", err)
-		os.Exit(1)
-	}
-	defer ln.Close()
+	// 1. Go Runtime Tuning
+	runtimeTuning()
 
-	fmt.Printf("LB listening on :%s, workers: %v\n", port, udsPaths)
+	// 2. Connect to worker Unix sockets
+	workerUDs := make([]*unix.SockaddrUnix, len(udsPaths))
+	for i, path := range udsPaths {
+		workerUDs[i] = &unix.SockaddrUnix{Name: path}
+	}
+
+	workerConns := make([]int, len(udsPaths)) // Connected worker UDS FDs
+
+	// Retry connecting to workers for 30 seconds
+	log.Println("Connecting to worker Unix sockets...")
+	for attempt := 0; attempt < 30; attempt++ {
+		allConnected := true
+		for i, udsAddr := range workerUDs {
+			if workerConns[i] == 0 { // Not yet connected
+				fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+				if err != nil {
+					log.Printf("Failed to create worker UDS socket for %s: %v", udsAddr.Name, err)
+					allConnected = false
+					continue
+				}
+				if err := unix.Connect(fd, udsAddr); err != nil {
+					log.Printf("Failed to connect to worker UDS %s: %v", udsAddr.Name, err)
+					unix.Close(fd)
+					allConnected = false
+					continue
+				}
+				log.Printf("Connected to worker UDS %s", udsAddr.Name)
+				workerConns[i] = fd
+			}
+		}
+		if allConnected {
+			break
+		}
+		time.Sleep(1 * time.Second)
+		if attempt == 29 {
+			log.Fatalf("Failed to connect to all workers after 30 retries.")
+		}
+	}
+
+	defer func() {
+		for _, fd := range workerConns {
+			if fd > 0 {
+				unix.Close(fd)
+			}
+		}
+	}()
+
+	// 3. Listen on TCP port
+	tcpAddr, err := net.ResolveTCPAddr("tcp", ":"+tcpPort)
+	if err != nil {
+		log.Fatalf("Failed to resolve TCP address: %v", err)
+	}
+	listener, err := net.ListenTCP("tcp", tcpAddr)
+	if err != nil {
+		log.Fatalf("Failed to listen on TCP port %s: %v", tcpPort, err)
+	}
+	defer listener.Close()
+
+	log.Printf("Listening on TCP port %s", tcpPort)
 
 	workerIdx := 0
 	for {
-		conn, err := ln.(*net.TCPListener).AcceptTCP()
+		conn, err := listener.AcceptTCP()
 		if err != nil {
-			fmt.Printf("AcceptTCP: %v\n", err)
+			log.Printf("Failed to accept TCP connection: %v", err)
 			continue
 		}
 
-		fd, err := conn.File()
+		// Get raw FD from TCP connection
+		rawConn, err := conn.SyscallConn()
 		if err != nil {
-			fmt.Printf("Conn File: %v\n", err)
+			log.Printf("Failed to get raw connection: %v", err)
 			conn.Close()
 			continue
 		}
-		conn.Close() // Close in LB, worker handles it
 
-		workerPath := udsPaths[workerIdx%len(udsPaths)]
-		if err := sendFD(workerPath, int(fd.Fd())); err != nil {
-			fmt.Printf("SendFD: %v\n", err)
-			unix.Close(int(fd.Fd()))
+		var clientFD int
+		rawConn.Control(func(fd uintptr) {
+			clientFD = int(fd)
+		})
+
+		// Set aggressive socket options on clientFD BEFORE passing
+		setSocketOptions(clientFD)
+
+		// Pass FD to worker via SCM_RIGHTS (round-robin)
+		targetWorkerFD := workerConns[workerIdx]
+		workerIdx = (workerIdx + 1) % len(workerConns)
+
+		// Send clientFD to worker using SCM_RIGHTS
+		err = sendClientFD(targetWorkerFD, clientFD)
+		if err != nil {
+			log.Printf("Failed to send client FD to worker %d: %v", targetWorkerFD, err)
+			unix.Close(clientFD) // Close if unable to pass
 		}
-		workerIdx++
 	}
 }
 
-func sendFD(udsPath string, fd int) error {
-	addr, err := net.ResolveUnixAddr("unix", udsPath)
-	if err != nil {
-		return err
-	}
+// runtimeTuning applies Go runtime optimizations
+func runtimeTuning() {
+}
 
-	conn, err := net.DialUnix("unix", nil, addr)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
+// sendClientFD sends a file descriptor over a Unix domain socket
+func sendClientFD(udsFD, clientFD int) error {
+	msg := unix.UnixRights(clientFD)
+	// We send an empty message but with the control message carrying the FD
+	return unix.Sendmsg(udsFD, nil, msg, nil, 0)
+}
 
-	fileConn := conn.(*net.UnixConn)
-	unixConn, err := fileConn.SyscallConn()
-	if err != nil {
-		return err
-	}
-
-	oob := unix.UnixRights(fd)
-	return unixConn.Control(func(s uintptr) {
-		err = unix.Sendmsg(int(s), nil, oob, nil, 0)
-	})
+// setSocketOptions applies aggressive socket options to the client FD
+func setSocketOptions(fd int) {
+	// TCP_NODELAY: disable Nagle's algorithm
+	unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_NODELAY, 1)
+	// TCP_QUICKACK: disable delayed ACKs
+	unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_QUICKACK, 1)
+	// SO_REUSEADDR, SO_REUSEPORT
+	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
 }

@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"syscall"
 
 	"github.com/rlevidev/rinha-2026/internal/index"
 	"github.com/rlevidev/rinha-2026/internal/vectorize"
@@ -138,10 +137,26 @@ func handleConn(fd int, idx *index.Set, mccRisk vectorize.MCCRisk) {
 			return
 		}
 
-		score := vectorize.CalculateScore(&tx, idx, mccRisk)
+		// Inline pipeline
+		floatVector := vectorize.Vectorize(tx, mccRisk)
+		intVector := index.Quantize(floatVector)
+		
+		// Calculate tag
+		var tag byte
+		if tx.CardPresent { tag |= (1 << 3) }
+		if tx.IsOnline { tag |= (1 << 2) }
+		isKnown := false
+		for _, m := range tx.KnownMerchants {
+			if m == tx.MerchantID { isKnown = true; break }
+		}
+		if !isKnown { tag |= (1 << 1) }
+		if tx.HasLastTx { tag |= 1 }
+
+		partition := idx.FindPartition(tag)
+		fraudCount := partition.Search(&intVector)
 		
 		respIdx := 0
-		if score < 0.2 { respIdx = 0 } else if score < 0.4 { respIdx = 1 } else if score < 0.6 { respIdx = 2 } else if score < 0.8 { respIdx = 3 } else if score < 1.0 { respIdx = 4 } else { respIdx = 5 }
+		if fraudCount == 0 { respIdx = 0 } else if fraudCount == 1 { respIdx = 1 } else if fraudCount == 2 { respIdx = 2 } else if fraudCount == 3 { respIdx = 3 } else if fraudCount == 4 { respIdx = 4 } else { respIdx = 5 }
 
 		conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "))
 		conn.Write([]byte(fmt.Sprintf("%d", len(responses[respIdx]))))
