@@ -17,6 +17,8 @@ func main() {
 	tcpPort := os.Args[1]
 	udsPaths := os.Args[2:]
 
+	fmt.Printf("DEBUG: LB TCP Port: %s, UDS paths: %v\n", tcpPort, udsPaths)
+
 	// 1. Go Runtime Tuning
 	runtimeTuning()
 

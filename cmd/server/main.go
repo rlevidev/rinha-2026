@@ -31,6 +31,8 @@ func main() {
 	socketPath := os.Args[1]
 	indexDir := os.Args[2]
 
+	fmt.Printf("DEBUG: Server socketPath is: %s\n", socketPath)
+
 	// Load index
 	idx, err := index.LoadSet(indexDir)
 	if err != nil {
@@ -48,8 +50,8 @@ func main() {
 	}
 
 	// Setup socket
-	if err := os.RemoveAll(socketPath); err != nil {
-		log.Fatalf("Failed to remove socket: %v", err)
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		log.Fatalf("Failed to remove existing socket %s: %v", socketPath, err)
 	}
 
 	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
