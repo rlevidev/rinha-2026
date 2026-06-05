@@ -2,6 +2,7 @@ package index
 
 import (
 	"encoding/binary"
+	"math/rand"
 	"os"
 	"testing"
 )
@@ -74,5 +75,69 @@ func TestSearch(t *testing.T) {
 
 	if fraudCount == 0 {
 		t.Errorf("expected fraud count > 0, got 0")
+	}
+}
+
+func TestClusterSearchExactMatch(t *testing.T) {
+	entries := make([]Entry, 500)
+	rng := rand.New(rand.NewSource(42))
+	for i := 0; i < 250; i++ {
+		for j := 0; j < 14; j++ {
+			entries[i].Vec[j] = 100 + int16(rng.Intn(50))
+		}
+		entries[i].Fraud = i%5 == 0
+	}
+	for i := 250; i < 500; i++ {
+		for j := 0; j < 14; j++ {
+			entries[i].Vec[j] = int16(rng.Intn(50))
+		}
+		entries[i].Fraud = i%5 == 0
+	}
+
+	centers := []ClusterCenter{
+		{Vec: [14]int16{125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125}},
+		{Vec: [14]int16{25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25}},
+	}
+	assignments := make([]uint8, 500)
+	for i := 0; i < 250; i++ {
+		assignments[i] = 0
+		var d int64
+		for j := 0; j < 14; j++ {
+			diff := int64(entries[i].Vec[j]) - int64(centers[0].Vec[j])
+			d += diff * diff
+		}
+		if d > centers[0].MaxRadius {
+			centers[0].MaxRadius = d
+		}
+	}
+	for i := 250; i < 500; i++ {
+		assignments[i] = 1
+		var d int64
+		for j := 0; j < 14; j++ {
+			diff := int64(entries[i].Vec[j]) - int64(centers[1].Vec[j])
+			d += diff * diff
+		}
+		if d > centers[1].MaxRadius {
+			centers[1].MaxRadius = d
+		}
+	}
+
+	clusteredP := &Partition{
+		entries:            entries,
+		clusterCenters:     centers,
+		clusterAssignments: assignments,
+	}
+	plainP := &Partition{entries: entries}
+
+	for i := 0; i < 100; i++ {
+		var query [14]int16
+		for j := 0; j < 14; j++ {
+			query[j] = int16(rng.Intn(150))
+		}
+		r1 := clusteredP.Search(&query)
+		r2 := plainP.Search(&query)
+		if r1 != r2 {
+			t.Errorf("Mismatch for query %v: clustered=%d, plain=%d", query, r1, r2)
+		}
 	}
 }

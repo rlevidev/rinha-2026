@@ -156,14 +156,188 @@ func Open(path string) (*Partition, error) {
 }
 
 // Search busca os 5 vizinhos mais próximos da query quantizada.
-// Usa early termination em 2 estágios com loop manualmente desenrolado
-// e hints para eliminar verificações de bounds do compilador.
+// Usa early termination em 2 estágios com loop manualmente desenrolado,
+// filtragem geométrica por cluster (triângulo da desigualdade) e fallback para full search.
 func (p *Partition) Search(query *[14]int16) uint8 {
 	q := query
 	_ = q[13]
 	top5dist := [5]int64{1 << 62, 1 << 62, 1 << 62, 1 << 62, 1 << 62}
 	var top5fraud [5]bool
+	var fraudCount uint8
 	entries := p.entries
+
+	if len(p.clusterCenters) > 0 {
+
+		nClusters := len(p.clusterCenters)
+		type cd struct {
+			idx  int
+			dist int64
+		}
+		centersDist := make([]cd, nClusters)
+		for i, cc := range p.clusterCenters {
+			cv := &cc.Vec
+			_ = cv[13]
+			diff := int64(q[0]) - int64(cv[0])
+			d := diff * diff
+			diff = int64(q[1]) - int64(cv[1])
+			d += diff * diff
+			diff = int64(q[2]) - int64(cv[2])
+			d += diff * diff
+			diff = int64(q[3]) - int64(cv[3])
+			d += diff * diff
+			diff = int64(q[4]) - int64(cv[4])
+			d += diff * diff
+			diff = int64(q[5]) - int64(cv[5])
+			d += diff * diff
+			diff = int64(q[6]) - int64(cv[6])
+			d += diff * diff
+			diff = int64(q[7]) - int64(cv[7])
+			d += diff * diff
+			diff = int64(q[8]) - int64(cv[8])
+			d += diff * diff
+			diff = int64(q[9]) - int64(cv[9])
+			d += diff * diff
+			diff = int64(q[10]) - int64(cv[10])
+			d += diff * diff
+			diff = int64(q[11]) - int64(cv[11])
+			d += diff * diff
+			diff = int64(q[12]) - int64(cv[12])
+			d += diff * diff
+			diff = int64(q[13]) - int64(cv[13])
+			d += diff * diff
+			centersDist[i] = cd{idx: i, dist: d}
+		}
+
+		for i := 1; i < nClusters; i++ {
+			j := i
+			for j > 0 && centersDist[j].dist < centersDist[j-1].dist {
+				centersDist[j], centersDist[j-1] = centersDist[j-1], centersDist[j]
+				j--
+			}
+		}
+
+		processedClusters := 0
+		for ci := 0; ci < nClusters; ci++ {
+			c := centersDist[ci]
+			center := &p.clusterCenters[c.idx]
+			minPossible := c.dist - center.MaxRadius
+			if minPossible < 0 {
+				minPossible = 0
+			}
+
+			if minPossible >= top5dist[4] && processedClusters >= 5 {
+				continue
+			}
+
+			for ei := range entries {
+				if p.clusterAssignments[ei] != uint8(c.idx) {
+					continue
+				}
+				e := &entries[ei]
+				v := &e.Vec
+				_ = v[13]
+
+				diff := int64(q[0]) - int64(v[0])
+				partial := diff * diff
+				diff = int64(q[1]) - int64(v[1])
+				partial += diff * diff
+				diff = int64(q[2]) - int64(v[2])
+				partial += diff * diff
+				diff = int64(q[3]) - int64(v[3])
+				partial += diff * diff
+				diff = int64(q[4]) - int64(v[4])
+				partial += diff * diff
+				diff = int64(q[5]) - int64(v[5])
+				partial += diff * diff
+				diff = int64(q[6]) - int64(v[6])
+				partial += diff * diff
+
+				if partial >= top5dist[4] {
+					continue
+				}
+
+				dist := partial
+				diff = int64(q[7]) - int64(v[7])
+				dist += diff * diff
+				diff = int64(q[8]) - int64(v[8])
+				dist += diff * diff
+				diff = int64(q[9]) - int64(v[9])
+				dist += diff * diff
+				diff = int64(q[10]) - int64(v[10])
+				dist += diff * diff
+				diff = int64(q[11]) - int64(v[11])
+				dist += diff * diff
+				diff = int64(q[12]) - int64(v[12])
+				dist += diff * diff
+				diff = int64(q[13]) - int64(v[13])
+				dist += diff * diff
+
+				if dist < top5dist[4] {
+					if dist < top5dist[0] {
+						top5dist[4] = top5dist[3]
+						top5fraud[4] = top5fraud[3]
+						top5dist[3] = top5dist[2]
+						top5fraud[3] = top5fraud[2]
+						top5dist[2] = top5dist[1]
+						top5fraud[2] = top5fraud[1]
+						top5dist[1] = top5dist[0]
+						top5fraud[1] = top5fraud[0]
+						top5dist[0] = dist
+						top5fraud[0] = e.Fraud
+					} else if dist < top5dist[1] {
+						top5dist[4] = top5dist[3]
+						top5fraud[4] = top5fraud[3]
+						top5dist[3] = top5dist[2]
+						top5fraud[3] = top5fraud[2]
+						top5dist[2] = top5dist[1]
+						top5fraud[2] = top5fraud[1]
+						top5dist[1] = dist
+						top5fraud[1] = e.Fraud
+					} else if dist < top5dist[2] {
+						top5dist[4] = top5dist[3]
+						top5fraud[4] = top5fraud[3]
+						top5dist[3] = top5dist[2]
+						top5fraud[3] = top5fraud[2]
+						top5dist[2] = dist
+						top5fraud[2] = e.Fraud
+					} else if dist < top5dist[3] {
+						top5dist[4] = top5dist[3]
+						top5fraud[4] = top5fraud[3]
+						top5dist[3] = dist
+						top5fraud[3] = e.Fraud
+					} else {
+						top5dist[4] = dist
+						top5fraud[4] = e.Fraud
+					}
+				}
+			}
+			processedClusters++
+		}
+
+		fraudCount = 0
+		if top5fraud[0] {
+			fraudCount++
+		}
+		if top5fraud[1] {
+			fraudCount++
+		}
+		if top5fraud[2] {
+			fraudCount++
+		}
+		if top5fraud[3] {
+			fraudCount++
+		}
+		if top5fraud[4] {
+			fraudCount++
+		}
+
+		if fraudCount == 0 || fraudCount == 5 || processedClusters == nClusters {
+			return fraudCount
+		}
+
+		top5dist = [5]int64{1 << 62, 1 << 62, 1 << 62, 1 << 62, 1 << 62}
+		top5fraud = [5]bool{}
+	}
 
 	for i := range entries {
 		e := &entries[i]
@@ -245,7 +419,7 @@ func (p *Partition) Search(query *[14]int16) uint8 {
 		}
 	}
 
-	var fraudCount uint8
+	fraudCount = 0
 	if top5fraud[0] {
 		fraudCount++
 	}
