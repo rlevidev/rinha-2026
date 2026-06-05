@@ -31,9 +31,9 @@ func main() {
 
 	workerConns := make([]int, len(udsPaths)) // Connected worker UDS FDs
 
-	// Retry connecting to workers for 30 seconds
+	// Retry connecting to workers for 100 seconds
 	log.Println("Connecting to worker Unix sockets...")
-	for attempt := 0; attempt < 30; attempt++ {
+	for attempt := 0; attempt < 100; attempt++ {
 		allConnected := true
 		for i, udsAddr := range workerUDs {
 			if workerConns[i] == 0 { // Not yet connected
@@ -57,8 +57,8 @@ func main() {
 			break
 		}
 		time.Sleep(1 * time.Second)
-		if attempt == 29 {
-			log.Fatalf("Failed to connect to all workers after 30 retries.")
+		if attempt == 99 {
+			log.Fatalf("Failed to connect to all workers after 100 retries.")
 		}
 	}
 

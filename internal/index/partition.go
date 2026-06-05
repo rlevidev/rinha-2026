@@ -1,32 +1,31 @@
 package index
 
 import (
+	"encoding/binary"
 	"fmt"
 	"os"
-	"unsafe"
-
-	"golang.org/x/sys/unix"
 )
 
 // Scale is the factor to convert float32 (0.0-1.0) to int16.
 const Scale = 32767
 
-// Entry é um vetor quantizado (14 int16) + label.
+// Entry (usado para processamento, não para mapeamento direto do arquivo)
 type Entry struct {
 	Vec   [14]int16
 	Fraud bool
 }
 
-// Partition representa uma partição do índice mapeada em memória.
+// Partition representa uma partição do índice.
 type Partition struct {
-	data    []byte // mmap'd data
 	entries []Entry
 }
 
-// Open mapeia o arquivo do índice, valida o cabeçalho e configura as fatias.
-// Utiliza mmap, mlock e madvise para performance.
+// NPartitions define o espaço de tag de 4 bits.
+const NPartitions = 16
+
+// Open lê o arquivo do índice, deserializando as entradas de 29 bytes.
 func Open(path string) (*Partition, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY, 0)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -38,39 +37,30 @@ func Open(path string) (*Partition, error) {
 	}
 	size := info.Size()
 
-	data, err := unix.Mmap(int(file.Fd()), 0, int(size), unix.PROT_READ, unix.MAP_SHARED)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := unix.Mlock(data); err != nil {
-		unix.Munmap(data)
-		return nil, err
-	}
-
-	unix.Madvise(data, unix.MADV_SEQUENTIAL)
-
-	// Assume 32 bytes per entry
-	entrySize := 32
+	const entrySize = 29
 	numEntries := int(size) / entrySize
 
-	// Create slice header directly
-	ptr := (*Entry)(unsafe.Pointer(&data[0]))
-	entries := unsafe.Slice(ptr, numEntries)
+	entries := make([]Entry, numEntries)
+	buf := make([]byte, entrySize)
+
+	for i := 0; i < numEntries; i++ {
+		_, err := file.Read(buf)
+		if err != nil {
+			return nil, err
+		}
+
+		for j := 0; j < 14; j++ {
+			entries[i].Vec[j] = int16(binary.LittleEndian.Uint16(buf[j*2 : j*2+2]))
+		}
+		entries[i].Fraud = (buf[28] == 1)
+	}
 
 	return &Partition{
-		data:    data,
 		entries: entries,
 	}, nil
 }
 
-// Close desmapeia o arquivo.
-func (p *Partition) Close() error {
-	unix.Munlock(p.data)
-	return unix.Munmap(p.data)
-}
-
-// Search busca os 5 vizinhos mais próximos da query quantizada e retorna a contagem de fraudes (0-5).
+// Search busca os 5 vizinhos mais próximos da query quantizada (otimizado).
 func (p *Partition) Search(query *[14]int16) uint8 {
 	type neighbor struct {
 		dist  int64
@@ -86,17 +76,12 @@ func (p *Partition) Search(query *[14]int16) uint8 {
 
 	for i := range p.entries {
 		entry := &p.entries[i]
-
-		// Squared Euclidean distance
 		var dist int64
 		for j := 0; j < 14; j++ {
 			diff := int64(query[j] - entry.Vec[j])
 			dist += diff * diff
 		}
-
-		// Insert into top5 if closer
 		if dist < top5[4].dist {
-			// Find position
 			for j := 4; j >= 0; j-- {
 				if j == 0 || dist >= top5[j-1].dist {
 					top5[j] = neighbor{dist: dist, fraud: entry.Fraud}
@@ -106,7 +91,6 @@ func (p *Partition) Search(query *[14]int16) uint8 {
 			}
 		}
 	}
-
 	var fraudCount uint8
 	for _, n := range top5 {
 		if n.fraud {
@@ -114,26 +98,6 @@ func (p *Partition) Search(query *[14]int16) uint8 {
 		}
 	}
 	return fraudCount
-}
-
-// Quantize converte um vetor de 14 float32 para um vetor de 14 int16.
-// Gerencia sentinelas -1.0 e aplica clamp e arredondamento.
-func Quantize(v [14]float32) [14]int16 {
-	var q [14]int16
-	for i, f := range v {
-		if f == -1.0 {
-			q[i] = -Scale
-		} else {
-			x := float64(f)
-			if x < 0 {
-				x = 0
-			} else if x > 1 {
-				x = 1
-			}
-			q[i] = int16(x*float64(Scale) + 0.5)
-		}
-	}
-	return q
 }
 
 // Set contém todas as partições indexadas por tag (0-15)
@@ -169,4 +133,15 @@ func (s *Set) FindPartition(tag uint8) *Partition {
 		return s.partitions[tag&^4]
 	}
 	return s.partitions[0]
+}
+
+// Quantize converte um vetor de 14 float32 para um vetor de 14 int16.
+func Quantize(v [14]float32) [14]int16 {
+	var q [14]int16
+	for i, f := range v {
+		x := float64(f)
+		if x < 0 { x = 0 } else if x > 1 { x = 1 }
+		q[i] = int16(x*float64(Scale) + 0.5)
+	}
+	return q
 }

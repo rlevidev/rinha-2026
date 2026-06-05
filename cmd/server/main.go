@@ -9,11 +9,88 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/rlevidev/rinha-2026/internal/index"
 	"github.com/rlevidev/rinha-2026/internal/vectorize"
 	"golang.org/x/sys/unix"
 )
+
+// request JSON structures matching the nested payload format
+type fraudScoreRequest struct {
+	Transaction transactionData `json:"transaction"`
+	Customer    customerData    `json:"customer"`
+	Merchant    merchantData    `json:"merchant"`
+	Terminal    terminalData    `json:"terminal"`
+	LastTx      *lastTxData     `json:"last_transaction"`
+}
+
+type transactionData struct {
+	Amount       float64 `json:"amount"`
+	Installments int     `json:"installments"`
+	RequestedAt  string  `json:"requested_at"`
+}
+
+type customerData struct {
+	AvgAmount      float64  `json:"avg_amount"`
+	TxCount24h     int      `json:"tx_count_24h"`
+	KnownMerchants []string `json:"known_merchants"`
+}
+
+type merchantData struct {
+	ID        string  `json:"id"`
+	MCC       string  `json:"mcc"`
+	AvgAmount float64 `json:"avg_amount"`
+}
+
+type terminalData struct {
+	IsOnline    bool    `json:"is_online"`
+	CardPresent bool    `json:"card_present"`
+	KmFromHome  float64 `json:"km_from_home"`
+}
+
+type lastTxData struct {
+	Timestamp     string  `json:"timestamp"`
+	KmFromCurrent float64 `json:"km_from_current"`
+}
+
+func parseRequestBody(body []byte) (vectorize.Transaction, error) {
+	var req fraudScoreRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return vectorize.Transaction{}, err
+	}
+
+	tx := vectorize.Transaction{
+		Amount:         req.Transaction.Amount,
+		Installments:   req.Transaction.Installments,
+		CustomerAvg:    req.Customer.AvgAmount,
+		TxCount24h:     req.Customer.TxCount24h,
+		KnownMerchants: req.Customer.KnownMerchants,
+		MerchantID:     req.Merchant.ID,
+		MerchantMCC:    req.Merchant.MCC,
+		MerchantAvg:    req.Merchant.AvgAmount,
+		IsOnline:       req.Terminal.IsOnline,
+		CardPresent:    req.Terminal.CardPresent,
+		KmFromHome:     req.Terminal.KmFromHome,
+	}
+
+	t, err := time.Parse(time.RFC3339, req.Transaction.RequestedAt)
+	if err == nil {
+		tx.RequestedAt = t
+	}
+
+	if req.LastTx != nil {
+		tx.HasLastTx = true
+		lastTxTime, err := time.Parse(time.RFC3339, req.LastTx.Timestamp)
+		if err == nil {
+			tx.LastTxMinutesAgo = t.Sub(lastTxTime).Minutes()
+		}
+		tx.LastTxKmFromCurrent = req.LastTx.KmFromCurrent
+	}
+
+	return tx, nil
+}
 
 var responses = [6][]byte{
 	[]byte(`{"approved":true,"fraud_score":0.0}`),
@@ -50,6 +127,14 @@ func main() {
 	}
 
 	// Setup socket
+	socketDir := filepath.Dir(socketPath)
+	info, err := os.Stat(socketDir)
+	if err == nil {
+		fmt.Printf("DEBUG: Socket dir %s mode: %v\n", socketDir, info.Mode())
+	} else {
+		fmt.Printf("DEBUG: Failed to stat socket dir %s: %v\n", socketDir, err)
+	}
+
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 		log.Fatalf("Failed to remove existing socket %s: %v", socketPath, err)
 	}
@@ -62,7 +147,7 @@ func main() {
 
 	addr := &unix.SockaddrUnix{Name: socketPath}
 	if err := unix.Bind(fd, addr); err != nil {
-		log.Fatalf("Bind error: %v", err)
+		log.Fatalf("Bind error on %s: %v", socketPath, err)
 	}
 	if err := unix.Listen(fd, 128); err != nil {
 		log.Fatalf("Listen error: %v", err)
@@ -70,38 +155,38 @@ func main() {
 
 	fmt.Printf("Server listening on %s\n", socketPath)
 
-	// FD passing loop
+	// Accept one control connection from LB and keep receiving FDs
 	for {
-		nfd, _, err := unix.Accept(fd)
+		ctrlFd, _, err := unix.Accept(fd)
 		if err != nil {
 			log.Printf("Accept error: %v", err)
 			continue
 		}
-		
-		// Receive FD from LB
-		oob := make([]byte, 1024)
-		buf := make([]byte, 1)
-		_, oobn, _, _, err := unix.Recvmsg(nfd, buf, oob, 0)
-		unix.Close(nfd)
-		if err != nil {
-			log.Printf("Recvmsg error: %v", err)
-			continue
+		fmt.Printf("LB connected on control fd %d\n", ctrlFd)
+
+		// Loop receiving FDs from this control connection
+		for {
+			oob := make([]byte, 1024)
+			buf := make([]byte, 1)
+			_, oobn, _, _, err := unix.Recvmsg(ctrlFd, buf, oob, 0)
+			if err != nil {
+				log.Printf("Recvmsg error (LB disconnected?): %v", err)
+				unix.Close(ctrlFd)
+				break
+			}
+
+			msgs, err := unix.ParseSocketControlMessage(oob[:oobn])
+			if err != nil || len(msgs) == 0 {
+				continue
+			}
+
+			receivedFds, err := unix.ParseUnixRights(&msgs[0])
+			if err != nil || len(receivedFds) == 0 {
+				continue
+			}
+
+			go handleConn(receivedFds[0], idx, mccRisk)
 		}
-		
-		msgs, err := unix.ParseSocketControlMessage(oob[:oobn])
-		if err != nil || len(msgs) == 0 {
-			log.Printf("Control message error: %v", err)
-			continue
-		}
-		
-		fds, err := unix.ParseUnixRights(&msgs[0])
-		if err != nil || len(fds) == 0 {
-			log.Printf("ParseUnixRights error: %v", err)
-			continue
-		}
-		
-		// Handle the FD (now in fds[0])
-		go handleConn(fds[0], idx, mccRisk)
 	}
 }
 
@@ -113,7 +198,7 @@ func handleConn(fd int, idx *index.Set, mccRisk vectorize.MCCRisk) {
 		return
 	}
 	defer conn.Close()
-	
+
 	reader := bufio.NewReader(conn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
@@ -132,9 +217,9 @@ func handleConn(fd int, idx *index.Set, mccRisk vectorize.MCCRisk) {
 			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 			return
 		}
-		
-		var tx vectorize.Transaction
-		if err := json.Unmarshal(body, &tx); err != nil {
+
+		tx, err := parseRequestBody(body)
+		if err != nil {
 			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
 			return
 		}
@@ -142,23 +227,46 @@ func handleConn(fd int, idx *index.Set, mccRisk vectorize.MCCRisk) {
 		// Inline pipeline
 		floatVector := vectorize.Vectorize(tx, mccRisk)
 		intVector := index.Quantize(floatVector)
-		
+
 		// Calculate tag
 		var tag byte
-		if tx.CardPresent { tag |= (1 << 3) }
-		if tx.IsOnline { tag |= (1 << 2) }
+		if tx.CardPresent {
+			tag |= (1 << 3)
+		}
+		if tx.IsOnline {
+			tag |= (1 << 2)
+		}
 		isKnown := false
 		for _, m := range tx.KnownMerchants {
-			if m == tx.MerchantID { isKnown = true; break }
+			if m == tx.MerchantID {
+				isKnown = true
+				break
+			}
 		}
-		if !isKnown { tag |= (1 << 1) }
-		if tx.HasLastTx { tag |= 1 }
+		if !isKnown {
+			tag |= (1 << 1)
+		}
+		if tx.HasLastTx {
+			tag |= 1
+		}
 
 		partition := idx.FindPartition(tag)
 		fraudCount := partition.Search(&intVector)
-		
+
 		respIdx := 0
-		if fraudCount == 0 { respIdx = 0 } else if fraudCount == 1 { respIdx = 1 } else if fraudCount == 2 { respIdx = 2 } else if fraudCount == 3 { respIdx = 3 } else if fraudCount == 4 { respIdx = 4 } else { respIdx = 5 }
+		if fraudCount == 0 {
+			respIdx = 0
+		} else if fraudCount == 1 {
+			respIdx = 1
+		} else if fraudCount == 2 {
+			respIdx = 2
+		} else if fraudCount == 3 {
+			respIdx = 3
+		} else if fraudCount == 4 {
+			respIdx = 4
+		} else {
+			respIdx = 5
+		}
 
 		conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "))
 		conn.Write([]byte(fmt.Sprintf("%d", len(responses[respIdx]))))

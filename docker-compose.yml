@@ -1,8 +1,10 @@
 services:
   lb:
-    build: .
+    build:
+      context: .
+      target: lb_final
     platform: linux/amd64
-    command: ["/app/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
+    command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
     ports:
       - "9999:9999"
     volumes:
@@ -17,9 +19,11 @@ services:
           memory: "8MB"
 
   api1:
-    build: .
+    build:
+      context: .
+      target: server_final
     platform: linux/amd64
-    command: ["/app/server", "/sockets/api1.sock", "/index"]
+    command: ["/server", "/sockets/api1.sock", "/index"]
     volumes:
       - sockets:/sockets
     deploy:
@@ -29,9 +33,11 @@ services:
           memory: "171MB"
 
   api2:
-    build: .
+    build:
+      context: .
+      target: server_final
     platform: linux/amd64
-    command: ["/app/server", "/sockets/api2.sock", "/index"]
+    command: ["/server", "/sockets/api2.sock", "/index"]
     volumes:
       - sockets:/sockets
     deploy:
