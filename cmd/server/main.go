@@ -92,13 +92,22 @@ func parseRequestBody(body []byte) (vectorize.Transaction, error) {
 	return tx, nil
 }
 
-var responses = [6][]byte{
-	[]byte(`{"approved":true,"fraud_score":0.0}`),
-	[]byte(`{"approved":true,"fraud_score":0.2}`),
-	[]byte(`{"approved":true,"fraud_score":0.4}`),
-	[]byte(`{"approved":false,"fraud_score":0.6}`),
-	[]byte(`{"approved":false,"fraud_score":0.8}`),
-	[]byte(`{"approved":false,"fraud_score":1.0}`),
+var fullResponses [6][]byte
+
+func init() {
+	bodies := [6]string{
+		`{"approved":true,"fraud_score":0.0}`,
+		`{"approved":true,"fraud_score":0.2}`,
+		`{"approved":true,"fraud_score":0.4}`,
+		`{"approved":false,"fraud_score":0.6}`,
+		`{"approved":false,"fraud_score":0.8}`,
+		`{"approved":false,"fraud_score":1.0}`,
+	}
+	statusLine := "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+	for i, body := range bodies {
+		header := fmt.Sprintf("%s%d\r\n\r\n", statusLine, len(body))
+		fullResponses[i] = append([]byte(header), body...)
+	}
 }
 
 func main() {
@@ -165,9 +174,9 @@ func main() {
 		fmt.Printf("LB connected on control fd %d\n", ctrlFd)
 
 		// Loop receiving FDs from this control connection
+		oob := make([]byte, 1024)
+		buf := make([]byte, 1)
 		for {
-			oob := make([]byte, 1024)
-			buf := make([]byte, 1)
 			_, oobn, _, _, err := unix.Recvmsg(ctrlFd, buf, oob, 0)
 			if err != nil {
 				log.Printf("Recvmsg error (LB disconnected?): %v", err)
@@ -268,10 +277,7 @@ func handleConn(fd int, idx *index.Set, mccRisk vectorize.MCCRisk) {
 			respIdx = 5
 		}
 
-		conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "))
-		conn.Write([]byte(fmt.Sprintf("%d", len(responses[respIdx]))))
-		conn.Write([]byte("\r\n\r\n"))
-		conn.Write(responses[respIdx])
+		conn.Write(fullResponses[respIdx])
 		return
 	}
 

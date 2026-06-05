@@ -60,42 +60,111 @@ func Open(path string) (*Partition, error) {
 	}, nil
 }
 
-// Search busca os 5 vizinhos mais próximos da query quantizada (otimizado).
+// Search busca os 5 vizinhos mais próximos da query quantizada.
+// Usa early termination em 2 estágios com loop manualmente desenrolado
+// e hints para eliminar verificações de bounds do compilador.
 func (p *Partition) Search(query *[14]int16) uint8 {
-	type neighbor struct {
-		dist  int64
-		fraud bool
-	}
-	top5 := [5]neighbor{
-		{dist: 1 << 62, fraud: false},
-		{dist: 1 << 62, fraud: false},
-		{dist: 1 << 62, fraud: false},
-		{dist: 1 << 62, fraud: false},
-		{dist: 1 << 62, fraud: false},
-	}
+	q := query
+	_ = q[13]
+	top5dist := [5]int64{1 << 62, 1 << 62, 1 << 62, 1 << 62, 1 << 62}
+	var top5fraud [5]bool
+	entries := p.entries
 
-	for i := range p.entries {
-		entry := &p.entries[i]
-		var dist int64
-		for j := 0; j < 14; j++ {
-			diff := int64(query[j] - entry.Vec[j])
-			dist += diff * diff
+	for i := range entries {
+		e := &entries[i]
+		v := &e.Vec
+		_ = v[13]
+
+		diff := int64(q[0]) - int64(v[0])
+		partial := diff * diff
+		diff = int64(q[1]) - int64(v[1])
+		partial += diff * diff
+		diff = int64(q[2]) - int64(v[2])
+		partial += diff * diff
+		diff = int64(q[3]) - int64(v[3])
+		partial += diff * diff
+		diff = int64(q[4]) - int64(v[4])
+		partial += diff * diff
+		diff = int64(q[5]) - int64(v[5])
+		partial += diff * diff
+		diff = int64(q[6]) - int64(v[6])
+		partial += diff * diff
+
+		if partial >= top5dist[4] {
+			continue
 		}
-		if dist < top5[4].dist {
-			for j := 4; j >= 0; j-- {
-				if j == 0 || dist >= top5[j-1].dist {
-					top5[j] = neighbor{dist: dist, fraud: entry.Fraud}
-					break
-				}
-				top5[j] = top5[j-1]
+
+		dist := partial
+		diff = int64(q[7]) - int64(v[7])
+		dist += diff * diff
+		diff = int64(q[8]) - int64(v[8])
+		dist += diff * diff
+		diff = int64(q[9]) - int64(v[9])
+		dist += diff * diff
+		diff = int64(q[10]) - int64(v[10])
+		dist += diff * diff
+		diff = int64(q[11]) - int64(v[11])
+		dist += diff * diff
+		diff = int64(q[12]) - int64(v[12])
+		dist += diff * diff
+		diff = int64(q[13]) - int64(v[13])
+		dist += diff * diff
+
+		if dist < top5dist[4] {
+			if dist < top5dist[0] {
+				top5dist[4] = top5dist[3]
+				top5fraud[4] = top5fraud[3]
+				top5dist[3] = top5dist[2]
+				top5fraud[3] = top5fraud[2]
+				top5dist[2] = top5dist[1]
+				top5fraud[2] = top5fraud[1]
+				top5dist[1] = top5dist[0]
+				top5fraud[1] = top5fraud[0]
+				top5dist[0] = dist
+				top5fraud[0] = e.Fraud
+			} else if dist < top5dist[1] {
+				top5dist[4] = top5dist[3]
+				top5fraud[4] = top5fraud[3]
+				top5dist[3] = top5dist[2]
+				top5fraud[3] = top5fraud[2]
+				top5dist[2] = top5dist[1]
+				top5fraud[2] = top5fraud[1]
+				top5dist[1] = dist
+				top5fraud[1] = e.Fraud
+			} else if dist < top5dist[2] {
+				top5dist[4] = top5dist[3]
+				top5fraud[4] = top5fraud[3]
+				top5dist[3] = top5dist[2]
+				top5fraud[3] = top5fraud[2]
+				top5dist[2] = dist
+				top5fraud[2] = e.Fraud
+			} else if dist < top5dist[3] {
+				top5dist[4] = top5dist[3]
+				top5fraud[4] = top5fraud[3]
+				top5dist[3] = dist
+				top5fraud[3] = e.Fraud
+			} else {
+				top5dist[4] = dist
+				top5fraud[4] = e.Fraud
 			}
 		}
 	}
+
 	var fraudCount uint8
-	for _, n := range top5 {
-		if n.fraud {
-			fraudCount++
-		}
+	if top5fraud[0] {
+		fraudCount++
+	}
+	if top5fraud[1] {
+		fraudCount++
+	}
+	if top5fraud[2] {
+		fraudCount++
+	}
+	if top5fraud[3] {
+		fraudCount++
+	}
+	if top5fraud[4] {
+		fraudCount++
 	}
 	return fraudCount
 }
@@ -140,7 +209,11 @@ func Quantize(v [14]float32) [14]int16 {
 	var q [14]int16
 	for i, f := range v {
 		x := float64(f)
-		if x < 0 { x = 0 } else if x > 1 { x = 1 }
+		if x < 0 {
+			x = 0
+		} else if x > 1 {
+			x = 1
+		}
 		q[i] = int16(x*float64(Scale) + 0.5)
 	}
 	return q

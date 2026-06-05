@@ -1,11 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"time"
-	"fmt"
 
 	"golang.org/x/sys/unix"
 )
@@ -115,8 +115,8 @@ func main() {
 		err = sendClientFD(targetWorkerFD, clientFD)
 		if err != nil {
 			log.Printf("Failed to send client FD to worker %d: %v", targetWorkerFD, err)
-			unix.Close(clientFD) // Close if unable to pass
 		}
+		conn.Close()
 	}
 }
 
