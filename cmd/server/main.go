@@ -1,282 +1,384 @@
+// Command server is the API worker. It receives client TCP fds from the LB
+// over a Unix control socket (SCM_RIGHTS), then runs an epoll event loop that
+// frames HTTP requests and runs the fraud pipeline:
+//
+//	recv → frame HTTP → parse JSON → vectorize → route by tag → IVF k-NN → reply
+//
+// Usage: server <uds_path>
 package main
 
 import (
-	"bufio"
-	"encoding/json"
-	"fmt"
-	"io"
-	"log"
-	"net"
-	"net/http"
+	"bytes"
 	"os"
-	"sync"
-	"time"
+	"runtime"
+	"runtime/debug"
+	"strconv"
+	"unsafe"
 
+	"github.com/rlevidev/rinha-2026/internal/fraud"
 	"github.com/rlevidev/rinha-2026/internal/index"
-	"github.com/rlevidev/rinha-2026/internal/vectorize"
+	"github.com/rlevidev/rinha-2026/internal/netx"
 	"golang.org/x/sys/unix"
 )
 
-var readerPool = sync.Pool{
-	New: func() interface{} {
-		return bufio.NewReaderSize(nil, 4096)
-	},
+const (
+	bufSize   = 4096
+	maxFDs    = 1024
+	maxEvents = 128
+
+	epollIn     = 0x001
+	epollRdhup  = 0x2000
+	schedFIFO   = 1
+	workerRTPri = 10
+)
+
+// connState is the per-fd receive buffer, indexed by fd number.
+type connState struct {
+	buf [bufSize]byte
+	pos int
 }
 
-// request JSON structures matching the nested payload format
-type fraudScoreRequest struct {
-	Transaction transactionData `json:"transaction"`
-	Customer    customerData    `json:"customer"`
-	Merchant    merchantData    `json:"merchant"`
-	Terminal    terminalData    `json:"terminal"`
-	LastTx      *lastTxData     `json:"last_transaction"`
-}
+var (
+	states  []connState
+	ctrlFD  int
+	epollFD int
 
-type transactionData struct {
-	Amount       float64 `json:"amount"`
-	Installments int     `json:"installments"`
-	RequestedAt  string  `json:"requested_at"`
-}
+	// partition indices, routed by the 4-bit tag
+	// (card_present<<3 | is_online<<2 | unknown_merchant<<1 | has_last_tx).
+	indices [index.NPartitions]*index.IvfIndex
 
-type customerData struct {
-	AvgAmount      float64  `json:"avg_amount"`
-	TxCount24h     int      `json:"tx_count_24h"`
-	KnownMerchants []string `json:"known_merchants"`
-}
+	// preallocated framing needles (avoid per-call []byte(string) conversions)
+	hdrSep = []byte("\r\n\r\n")
+	clKey  = []byte("content-length:")
 
-type merchantData struct {
-	ID        string  `json:"id"`
-	MCC       string  `json:"mcc"`
-	AvgAmount float64 `json:"avg_amount"`
-}
-
-type terminalData struct {
-	IsOnline    bool    `json:"is_online"`
-	CardPresent bool    `json:"card_present"`
-	KmFromHome  float64 `json:"km_from_home"`
-}
-
-type lastTxData struct {
-	Timestamp     string  `json:"timestamp"`
-	KmFromCurrent float64 `json:"km_from_current"`
-}
-
-func parseRequestBody(body []byte) (vectorize.Transaction, error) {
-	var req fraudScoreRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		return vectorize.Transaction{}, err
+	// pre-rendered responses, one per fraud-score bucket (count 0..5).
+	responses = [6][]byte{
+		[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.0}"),
+		[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.2}"),
+		[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"approved\":true,\"fraud_score\":0.4}"),
+		[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":0.6}"),
+		[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":0.8}"),
+		[]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 36\r\n\r\n{\"approved\":false,\"fraud_score\":1.0}"),
 	}
+	readyResp = []byte("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+	errResp   = []byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+)
 
-	tx := vectorize.Transaction{
-		Amount:         req.Transaction.Amount,
-		Installments:   req.Transaction.Installments,
-		CustomerAvg:    req.Customer.AvgAmount,
-		TxCount24h:     req.Customer.TxCount24h,
-		KnownMerchants: req.Customer.KnownMerchants,
-		MerchantID:     req.Merchant.ID,
-		MerchantMCC:    req.Merchant.MCC,
-		MerchantAvg:    req.Merchant.AvgAmount,
-		IsOnline:       req.Terminal.IsOnline,
-		CardPresent:    req.Terminal.CardPresent,
-		KmFromHome:     req.Terminal.KmFromHome,
+// bindControlUDS unlinks any stale socket, binds path, listens, and blocks in
+// accept4 until the LB connects, returning the accepted control fd.
+func bindControlUDS(path string) (int, error) {
+	unix.Unlink(path) // best-effort
+	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
 	}
-
-	t, err := time.Parse(time.RFC3339, req.Transaction.RequestedAt)
-	if err == nil {
-		tx.RequestedAt = t
+	if err := unix.Bind(fd, &unix.SockaddrUnix{Name: path}); err != nil {
+		unix.Close(fd)
+		return -1, err
 	}
-
-	if req.LastTx != nil {
-		tx.HasLastTx = true
-		lastTxTime, err := time.Parse(time.RFC3339, req.LastTx.Timestamp)
-		if err == nil {
-			tx.LastTxMinutesAgo = t.Sub(lastTxTime).Minutes()
+	unix.Chmod(path, 0o666) // LB usually runs as a different uid; best-effort
+	if err := unix.Listen(fd, 8); err != nil {
+		unix.Close(fd)
+		return -1, err
+	}
+	for {
+		cfd, _, err := unix.Accept4(fd, unix.SOCK_CLOEXEC)
+		if err == unix.EINTR {
+			continue
 		}
-		tx.LastTxKmFromCurrent = req.LastTx.KmFromCurrent
+		unix.Close(fd)
+		if err != nil {
+			return -1, err
+		}
+		return cfd, nil
 	}
-
-	return tx, nil
 }
 
-var fullResponses [6][]byte
+// handleRequest routes one framed HTTP request. POST /fraud-score runs the
+// full pipeline; GET returns the ready response; anything else is a 400.
+// req is the full framed message; bodyOff is the start of the JSON body.
+func handleRequest(req []byte, bodyOff int) []byte {
+	n := len(req)
+	if n >= 5 && req[0] == 'P' && req[1] == 'O' && req[2] == 'S' && req[3] == 'T' && req[4] == ' ' {
+		var r fraud.Request
+		if !fraud.ParseRequest(req[bodyOff:], &r) {
+			return errResp
+		}
+		v := fraud.Vectorize(&r)
+		// 4-bit tag: has_last | unknown | online | card. The online&card combo
+		// never occurs in training, so its partitions are absent — fall back by
+		// clearing the card bit (online&!card is always populated).
+		tag := 0
+		if r.HasLastTx {
+			tag |= 1
+		}
+		if !r.KnownMerchant {
+			tag |= 2
+		}
+		if r.IsOnline {
+			tag |= 4
+		}
+		if r.CardPresent {
+			tag |= 8
+		}
+		if indices[tag] == nil {
+			tag &^= 8
+			if indices[tag] == nil {
+				tag &^= 4
+			}
+		}
+		cnt := indices[tag].Search(&v)
+		if cnt > 5 {
+			cnt = 5
+		}
+		return responses[cnt]
+	}
+	if n >= 4 && req[0] == 'G' && req[1] == 'E' && req[2] == 'T' && req[3] == ' ' {
+		return readyResp
+	}
+	return errResp
+}
 
-func init() {
-	bodies := [6]string{
-		`{"approved":true,"fraud_score":0.0}`,
-		`{"approved":true,"fraud_score":0.2}`,
-		`{"approved":true,"fraud_score":0.4}`,
-		`{"approved":false,"fraud_score":0.6}`,
-		`{"approved":false,"fraud_score":0.8}`,
-		`{"approved":false,"fraud_score":1.0}`,
+func sendAll(fd int, p []byte) error {
+	off := 0
+	for off < len(p) {
+		n, err := unix.SendmsgN(fd, p[off:], nil, nil, unix.MSG_NOSIGNAL)
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		off += n
 	}
-	statusLine := "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
-	for i, body := range bodies {
-		header := fmt.Sprintf("%s%d\r\n\r\n", statusLine, len(body))
-		fullResponses[i] = append([]byte(header), body...)
+	return nil
+}
+
+// schedParam mirrors `struct sched_param` (a single priority int).
+type schedParam struct{ priority int32 }
+
+// setRealtimePriority promotes this thread to SCHED_FIFO so an inbound packet
+// wakes us above SCHED_OTHER. Best-effort (needs CAP_SYS_NICE).
+func setRealtimePriority() {
+	p := schedParam{priority: workerRTPri}
+	unix.Syscall(unix.SYS_SCHED_SETSCHEDULER, 0, uintptr(schedFIFO), uintptr(unsafe.Pointer(&p)))
+}
+
+func closeClient(fd int) {
+	unix.EpollCtl(epollFD, unix.EPOLL_CTL_DEL, fd, nil)
+	unix.Close(fd)
+	if fd < maxFDs {
+		states[fd].pos = 0
 	}
+}
+
+// contentLength scans header bytes for "content-length:" (case-insensitive)
+// and returns its value, or -1 if absent. Allocation-free.
+func contentLength(hdr []byte) int {
+	i := indexFold(hdr, clKey)
+	if i < 0 {
+		return -1
+	}
+	j := i + len(clKey)
+	for j < len(hdr) && (hdr[j] == ' ' || hdr[j] == '\t') {
+		j++
+	}
+	n := 0
+	for j < len(hdr) && hdr[j] >= '0' && hdr[j] <= '9' {
+		n = n*10 + int(hdr[j]-'0')
+		j++
+	}
+	return n
+}
+
+// indexFold finds needle in hay, case-insensitive on ASCII, without allocating.
+// needle must already be lowercase.
+func indexFold(hay, needle []byte) int {
+	if len(needle) == 0 {
+		return 0
+	}
+	last := len(hay) - len(needle)
+	for i := 0; i <= last; i++ {
+		k := 0
+		for ; k < len(needle); k++ {
+			c := hay[i+k]
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+			}
+			if c != needle[k] {
+				break
+			}
+		}
+		if k == len(needle) {
+			return i
+		}
+	}
+	return -1
+}
+
+// recvNB does a non-blocking recvfrom with a NULL source address, avoiding the
+// per-call sockaddr allocation that unix.Recvfrom incurs.
+func recvNB(fd int, p []byte) (int, unix.Errno) {
+	r0, _, e := unix.Syscall6(unix.SYS_RECVFROM, uintptr(fd),
+		uintptr(unsafe.Pointer(&p[0])), uintptr(len(p)), uintptr(unix.MSG_DONTWAIT), 0, 0)
+	return int(r0), e
+}
+
+func handleClientEvent(fd int) {
+	st := &states[fd]
+	if st.pos >= bufSize {
+		closeClient(fd) // oversized request
+		return
+	}
+	n, errno := recvNB(fd, st.buf[st.pos:])
+	if errno == unix.EAGAIN || errno == unix.EWOULDBLOCK || errno == unix.EINTR {
+		return
+	}
+	if n == 0 || errno != 0 {
+		closeClient(fd)
+		return
+	}
+	st.pos += n
+
+	for st.pos > 0 {
+		hdrEnd := bytes.Index(st.buf[:st.pos], hdrSep)
+		if hdrEnd < 0 {
+			return // partial headers — wait for more
+		}
+		bodyOff := hdrEnd + 4
+		cl := contentLength(st.buf[:bodyOff])
+		if cl < 0 {
+			cl = 0
+		}
+		total := bodyOff + cl
+		if st.pos < total {
+			return // body incomplete — wait for more
+		}
+		if err := sendAll(fd, handleRequest(st.buf[:total], bodyOff)); err != nil {
+			closeClient(fd)
+			return
+		}
+		// shift any pipelined leftover to the front
+		rem := st.pos - total
+		if rem > 0 {
+			copy(st.buf[:rem], st.buf[total:st.pos])
+		}
+		st.pos = rem
+	}
+}
+
+var (
+	ctrlOOB   [256]byte
+	fdScratch = make([]int, 0, 64)
+)
+
+func handleCtrlEvent() {
+	fds, ok, err := netx.RecvFDs(ctrlFD, ctrlOOB[:], fdScratch[:0])
+	if !ok || err != nil {
+		return
+	}
+	for _, fd := range fds {
+		if fd >= maxFDs {
+			unix.Close(fd) // out of state range — reject
+			continue
+		}
+		states[fd].pos = 0
+		unix.EpollCtl(epollFD, unix.EPOLL_CTL_ADD, fd,
+			&unix.EpollEvent{Events: epollIn | epollRdhup, Fd: int32(fd)})
+	}
+}
+
+func serverLoop() {
+	events := make([]unix.EpollEvent, maxEvents)
+	for {
+		n, err := unix.EpollWait(epollFD, events, 1) // 1ms; kernel busy-polls 50µs first
+		if err == unix.EINTR {
+			continue
+		}
+		if n <= 0 {
+			continue
+		}
+		for i := 0; i < n; i++ {
+			fd := int(events[i].Fd)
+			if fd == ctrlFD {
+				handleCtrlEvent()
+			} else {
+				handleClientEvent(fd)
+			}
+		}
+	}
+}
+
+func die(msg string) {
+	os.Stderr.WriteString(msg + "\n")
+	os.Exit(1)
 }
 
 func main() {
-	if len(os.Args) < 3 {
-		log.Fatalf("Usage: %s <unix_socket_path> <index_dir>", os.Args[0])
-	}
-	socketPath := os.Args[1]
-	indexDir := os.Args[2]
+	runtime.GOMAXPROCS(1)
+	// GC off: the steady-state per-request path is allocation-free, so periodic
+	// GC would only burn CPU at our 0.475-core budget. SetMemoryLimit is a
+	// backstop that triggers a collection only if memory creeps toward the cap.
+	debug.SetGCPercent(-1)
+	debug.SetMemoryLimit(160 << 20) // < 171 MB container limit
 
-	// Load index
-	idx, err := index.LoadSet(indexDir)
-	if err != nil {
-		log.Fatalf("Failed to load index: %v", err)
+	if err := fraud.InitMCCRisk("/resources/mcc_risk.json"); err != nil {
+		die("failed to init mcc risk: " + err.Error())
 	}
-
-	// Load mcc_risk
-	mccRiskFile, err := os.ReadFile("/resources/mcc_risk.json")
-	if err != nil {
-		log.Fatalf("Failed to load /resources/mcc_risk.json: %v", err)
+	if len(os.Args) < 2 {
+		die("usage: server <uds_path> [index_dir]")
 	}
-	var mccRisk vectorize.MCCRisk
-	if err := json.Unmarshal(mccRiskFile, &mccRisk); err != nil {
-		log.Fatalf("Failed to unmarshal mcc_risk: %v", err)
+	udsPath := os.Args[1]
+	indexDir := "."
+	if len(os.Args) >= 3 {
+		indexDir = os.Args[2]
 	}
 
-	// Setup socket
-	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
-		log.Fatalf("Failed to remove existing socket %s: %v", socketPath, err)
+	if !index.HasAVX2() {
+		die("fatal: CPU sem AVX2")
 	}
 
-	fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-	if err != nil {
-		log.Fatalf("Socket error: %v", err)
-	}
-	defer unix.Close(fd)
+	unix.Prctl(unix.PR_SET_TIMERSLACK, 1, 0, 0, 0)
+	unix.Mlockall(unix.MCL_CURRENT | unix.MCL_FUTURE)
+	setRealtimePriority()
 
-	addr := &unix.SockaddrUnix{Name: socketPath}
-	if err := unix.Bind(fd, addr); err != nil {
-		log.Fatalf("Bind error on %s: %v", socketPath, err)
-	}
-	if err := unix.Listen(fd, 128); err != nil {
-		log.Fatalf("Listen error: %v", err)
-	}
+	states = make([]connState, maxFDs)
 
-	fmt.Printf("Server listening on %s\n", socketPath)
-
-	// Accept one control connection from LB and keep receiving FDs
-	for {
-		ctrlFd, _, err := unix.Accept(fd)
+	// Open the partition indices (up to 16; the online&card tags don't exist,
+	// so missing files are skipped — the router falls back for them).
+	loaded := 0
+	for i := 0; i < index.NPartitions; i++ {
+		path := indexDir + "/index_p" + strconv.Itoa(i) + ".bin"
+		if _, err := os.Stat(path); err != nil {
+			continue // tag has no partition (e.g. online&card)
+		}
+		ix, err := index.Open(path)
 		if err != nil {
-			log.Printf("Accept error: %v", err)
-			continue
+			die("error: failed to open index_p" + strconv.Itoa(i) + ".bin: " + err.Error())
 		}
-		// Loop receiving FDs from this control connection
-		oob := make([]byte, 1024)
-		buf := make([]byte, 1)
-		for {
-			_, oobn, _, _, err := unix.Recvmsg(ctrlFd, buf, oob, 0)
-			if err != nil {
-				log.Printf("Recvmsg error (LB disconnected?): %v", err)
-				unix.Close(ctrlFd)
-				break
-			}
-
-			msgs, err := unix.ParseSocketControlMessage(oob[:oobn])
-			if err != nil || len(msgs) == 0 {
-				continue
-			}
-
-			receivedFds, err := unix.ParseUnixRights(&msgs[0])
-			if err != nil || len(receivedFds) == 0 {
-				continue
-			}
-
-			go handleConn(receivedFds[0], idx, mccRisk)
-		}
+		indices[i] = ix
+		loaded++
 	}
-}
+	if loaded == 0 {
+		die("error: no index files found in " + indexDir)
+	}
 
-func handleConn(fd int, idx *index.Set, mccRisk vectorize.MCCRisk) {
-	f := os.NewFile(uintptr(fd), "socket")
-	defer f.Close()
-	conn, err := net.FileConn(f)
+	cfd, err := bindControlUDS(udsPath)
 	if err != nil {
-		return
+		die("error: bind_control_uds failed: " + err.Error())
 	}
-	defer conn.Close()
+	ctrlFD = cfd
+	unix.SetNonblock(ctrlFD, true)
 
-	reader := readerPool.Get().(*bufio.Reader)
-	reader.Reset(conn)
-	req, err := http.ReadRequest(reader)
+	epollFD, err = unix.EpollCreate1(unix.EPOLL_CLOEXEC)
 	if err != nil {
-		readerPool.Put(reader)
-		return
+		die("error: epoll_create1 failed")
 	}
-	defer req.Body.Close()
-	defer readerPool.Put(reader)
-
-	if req.URL.Path == "/ready" {
-		conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"))
-		return
+// 	netx.SetEpollBusyPoll(epollFD)
+	if err := unix.EpollCtl(epollFD, unix.EPOLL_CTL_ADD, ctrlFD,
+		&unix.EpollEvent{Events: epollIn, Fd: int32(ctrlFD)}); err != nil {
+		die("error: epoll_ctl add ctrl failed")
 	}
 
-	if req.URL.Path == "/fraud-score" && req.Method == "POST" {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
-			return
-		}
-
-		tx, err := parseRequestBody(body)
-		if err != nil {
-			conn.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
-			return
-		}
-
-		// Inline pipeline
-		floatVector := vectorize.Vectorize(tx, mccRisk)
-		intVector := index.Quantize(floatVector)
-
-		// Calculate tag
-		var tag byte
-		if tx.CardPresent {
-			tag |= (1 << 3)
-		}
-		if tx.IsOnline {
-			tag |= (1 << 2)
-		}
-		isKnown := false
-		for _, m := range tx.KnownMerchants {
-			if m == tx.MerchantID {
-				isKnown = true
-				break
-			}
-		}
-		if !isKnown {
-			tag |= (1 << 1)
-		}
-		if tx.HasLastTx {
-			tag |= 1
-		}
-
-		partition := idx.FindPartition(tag)
-		fraudCount := partition.Search(&intVector)
-
-		respIdx := 0
-		if fraudCount == 0 {
-			respIdx = 0
-		} else if fraudCount == 1 {
-			respIdx = 1
-		} else if fraudCount == 2 {
-			respIdx = 2
-		} else if fraudCount == 3 {
-			respIdx = 3
-		} else if fraudCount == 4 {
-			respIdx = 4
-		} else {
-			respIdx = 5
-		}
-
-		conn.Write(fullResponses[respIdx])
-		return
-	}
-
-	conn.Write([]byte("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"))
+	serverLoop()
 }

@@ -1,139 +1,190 @@
+// Command lb is the load balancer: a TCP listener that hands accepted client
+// fds to the API workers over Unix sockets with SCM_RIGHTS. No HTTP byte
+// proxying — once SendFD returns, the API owns the connection end-to-end.
+//
+// Single-thread epoll. Usage:
+//
+//	lb <port> <uds_path1> [uds_path2 ...]
 package main
 
 import (
-	"log"
-	"net"
 	"os"
+	"runtime"
+	"runtime/debug"
+	"strconv"
 	"time"
 
+	"github.com/rlevidev/rinha-2026/internal/netx"
 	"golang.org/x/sys/unix"
 )
 
-func main() {
-	if len(os.Args) < 3 {
-		log.Fatalf("Usage: %s <tcp_port> <uds_path1> [uds_path2 ...]", os.Args[0])
+const (
+	maxBackends    = 8
+	maxEvents      = 128
+	backendRetries = 50
+	retrySleep     = 100 * time.Millisecond
+
+	epollIn     = 0x001
+	epollEt     = 0x80000000
+	tcpFastOpen = 23 // server-side TFO accept-queue length
+)
+
+var (
+	backendsFD []int
+	rrCursor   int
+)
+
+// listenTCP binds 0.0.0.0:port, applies the latency sockopts, listens(4096),
+// and sets O_NONBLOCK.
+func listenTCP(port int) (int, error) {
+	fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+	if err != nil {
+		return -1, err
 	}
+	// best-effort latency/throughput knobs (failures are harmless)
+	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
+	unix.SetsockoptInt(fd, unix.SOL_TCP, unix.TCP_DEFER_ACCEPT, 1)
+// 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_BUSY_POLL, 50)
+// 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PREFER_BUSY_POLL, 1)
+// 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_BUSY_POLL_BUDGET, 8)
+	unix.SetsockoptInt(fd, unix.SOL_TCP, tcpFastOpen, 256)
 
-	tcpPort := os.Args[1]
-	udsPaths := os.Args[2:]
-
-	// 1. Go Runtime Tuning
-	runtimeTuning()
-
-	// 2. Connect to worker Unix sockets
-	workerUDs := make([]*unix.SockaddrUnix, len(udsPaths))
-	for i, path := range udsPaths {
-		workerUDs[i] = &unix.SockaddrUnix{Name: path}
+	addr := &unix.SockaddrInet4{Port: port} // Addr zero = INADDR_ANY
+	if err := unix.Bind(fd, addr); err != nil {
+		unix.Close(fd)
+		return -1, err
 	}
+	if err := unix.Listen(fd, 4096); err != nil {
+		unix.Close(fd)
+		return -1, err
+	}
+	unix.SetNonblock(fd, true)
+	return fd, nil
+}
 
-	workerConns := make([]int, len(udsPaths)) // Connected worker UDS FDs
+// acceptLoop drains accept4 until EAGAIN; each client fd is round-robined to a
+// backend via SCM_RIGHTS, then closed locally.
+func acceptLoop(listenFD int) {
+	for {
+		cfd, _, err := unix.Accept4(listenFD, unix.SOCK_CLOEXEC)
+		if err == unix.EINTR {
+			continue
+		}
+		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
+			return
+		}
+		if err != nil {
+			return
+		}
+		be := backendsFD[rrCursor%len(backendsFD)]
+		rrCursor++
+		_ = netx.SendFD(be, cfd) // ignore error — proceed to close
+		unix.Close(cfd)
+	}
+}
 
-	// Retry connecting to workers for 100 seconds
-	log.Println("Connecting to worker Unix sockets...")
-	for attempt := 0; attempt < 100; attempt++ {
-		allConnected := true
-		for i, udsAddr := range workerUDs {
-			if workerConns[i] == 0 { // Not yet connected
-				fd, err := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM, 0)
-				if err != nil {
-					log.Printf("Failed to create worker UDS socket for %s: %v", udsAddr.Name, err)
-					allConnected = false
-					continue
-				}
-				if err := unix.Connect(fd, udsAddr); err != nil {
-					log.Printf("Failed to connect to worker UDS %s: %v", udsAddr.Name, err)
-					unix.Close(fd)
-					allConnected = false
-					continue
-				}
-				log.Printf("Connected to worker UDS %s", udsAddr.Name)
-				workerConns[i] = fd
+// selfWarm opens a few short connections back to the LB's own listen port so
+// the docker-proxy / NAT / accept→SCM_RIGHTS→API path is primed before real
+// traffic arrives. Runs in a transient goroutine (fork after the runtime
+// starts is unsafe), warming the same kernel paths.
+func selfWarm(port int) {
+	const iters = 32
+	body := []byte("POST /fraud-score HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: 407\r\n\r\n" +
+		`{"id":"tx-warm","transaction":{"amount":384.88,"installments":3,"requested_at":"2026-03-11T20:23:35Z"},"customer":{"avg_amount":769.76,"tx_count_24h":3,"known_merchants":["MERC-009","MERC-001"]},"merchant":{"id":"MERC-001","mcc":"5912","avg_amount":298.95},"terminal":{"is_online":false,"card_present":true,"km_from_home":13.7},"last_transaction":{"timestamp":"2026-03-11T14:58:35Z","km_from_current":18.8}}`)
+	addr := &unix.SockaddrInet4{Port: port, Addr: [4]byte{127, 0, 0, 1}}
+	var scratch [4096]byte
+	for i := 0; i < iters; i++ {
+		fd, err := unix.Socket(unix.AF_INET, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+		if err != nil {
+			continue
+		}
+		if unix.Connect(fd, addr) == nil {
+			unix.Sendmsg(fd, body, nil, nil, unix.MSG_NOSIGNAL)
+			unix.Read(fd, scratch[:])
+		}
+		unix.Close(fd)
+	}
+}
+
+func serverLoop(epfd, listenFD int) {
+	events := make([]unix.EpollEvent, maxEvents)
+	for {
+		n, err := unix.EpollWait(epfd, events, -1) // blocking; no spin at 0.05 CPU
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			continue
+		}
+		for i := 0; i < n; i++ {
+			if int(events[i].Fd) == listenFD {
+				acceptLoop(listenFD)
 			}
 		}
-		if allConnected {
-			break
-		}
-		time.Sleep(1 * time.Second)
-		if attempt == 99 {
-			log.Fatalf("Failed to connect to all workers after 100 retries.")
-		}
+	}
+}
+
+func die(msg string) {
+	os.Stderr.WriteString(msg + "\n")
+	os.Exit(1)
+}
+
+func main() {
+	runtime.GOMAXPROCS(1)
+	// GC off: the accept→SCM_RIGHTS→close path allocates nothing per request.
+	// SetMemoryLimit is a backstop well under the LB's tiny budget.
+	debug.SetGCPercent(-1)
+	debug.SetMemoryLimit(6 << 20)
+
+	if len(os.Args) < 3 {
+		die("usage: lb <port> <uds_path1> [uds_path2 ...]")
+	}
+	port, _ := strconv.Atoi(os.Args[1])
+
+	unix.Prctl(unix.PR_SET_TIMERSLACK, 1, 0, 0, 0)
+	// No mlockall here: at the LB's tiny memory budget, pinning the whole Go
+	// runtime resident is counterproductive. We rely on the pages staying hot
+	// under steady traffic instead.
+
+	listenFD, err := listenTCP(port)
+	if err != nil {
+		die("lb: listen_tcp failed: " + err.Error())
 	}
 
-	defer func() {
-		for _, fd := range workerConns {
-			if fd > 0 {
+	paths := os.Args[2:]
+	if len(paths) > maxBackends {
+		paths = paths[:maxBackends]
+	}
+	for _, p := range paths {
+		bfd := -1
+		for r := 0; r < backendRetries; r++ {
+			fd, e := unix.Socket(unix.AF_UNIX, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, 0)
+			if e == nil {
+				if unix.Connect(fd, &unix.SockaddrUnix{Name: p}) == nil {
+					bfd = fd
+					break
+				}
 				unix.Close(fd)
 			}
+			time.Sleep(retrySleep)
 		}
-	}()
+		if bfd < 0 {
+			die("lb: backend connect failed (gave up): " + p)
+		}
+		backendsFD = append(backendsFD, bfd)
+	}
 
-	// 3. Listen on TCP port
-	tcpAddr, err := net.ResolveTCPAddr("tcp", ":"+tcpPort)
+	epfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
 	if err != nil {
-		log.Fatalf("Failed to resolve TCP address: %v", err)
+		die("lb: epoll_create1 failed")
 	}
-	listener, err := net.ListenTCP("tcp", tcpAddr)
-	if err != nil {
-		log.Fatalf("Failed to listen on TCP port %s: %v", tcpPort, err)
+// 	netx.SetEpollBusyPoll(epfd)
+	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, listenFD,
+		&unix.EpollEvent{Events: epollIn | epollEt, Fd: int32(listenFD)}); err != nil {
+		die("lb: epoll_ctl add listen failed")
 	}
-	defer listener.Close()
 
-	log.Printf("Listening on TCP port %s", tcpPort)
-
-	workerIdx := 0
-	for {
-		conn, err := listener.AcceptTCP()
-		if err != nil {
-			log.Printf("Failed to accept TCP connection: %v", err)
-			continue
-		}
-
-		// Get raw FD from TCP connection
-		rawConn, err := conn.SyscallConn()
-		if err != nil {
-			log.Printf("Failed to get raw connection: %v", err)
-			conn.Close()
-			continue
-		}
-
-		var clientFD int
-		rawConn.Control(func(fd uintptr) {
-			clientFD = int(fd)
-		})
-
-		// Set aggressive socket options on clientFD BEFORE passing
-		setSocketOptions(clientFD)
-
-		// Pass FD to worker via SCM_RIGHTS (round-robin)
-		targetWorkerFD := workerConns[workerIdx]
-		workerIdx = (workerIdx + 1) % len(workerConns)
-
-		// Send clientFD to worker using SCM_RIGHTS
-		err = sendClientFD(targetWorkerFD, clientFD)
-		if err != nil {
-			log.Printf("Failed to send client FD to worker %d: %v", targetWorkerFD, err)
-		}
-		conn.Close()
-	}
-}
-
-// runtimeTuning applies Go runtime optimizations
-func runtimeTuning() {
-}
-
-// sendClientFD sends a file descriptor over a Unix domain socket
-func sendClientFD(udsFD, clientFD int) error {
-	msg := unix.UnixRights(clientFD)
-	// We send an empty message but with the control message carrying the FD
-	return unix.Sendmsg(udsFD, nil, msg, nil, 0)
-}
-
-// setSocketOptions applies aggressive socket options to the client FD
-func setSocketOptions(fd int) {
-	// TCP_NODELAY: disable Nagle's algorithm
-	unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_NODELAY, 1)
-	// TCP_QUICKACK: disable delayed ACKs
-	unix.SetsockoptInt(fd, unix.IPPROTO_TCP, unix.TCP_QUICKACK, 1)
-	// SO_REUSEADDR, SO_REUSEPORT
-	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
+	go selfWarm(port)
+	serverLoop(epfd, listenFD)
 }

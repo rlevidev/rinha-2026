@@ -1,10 +1,11 @@
 FROM golang:1.26-alpine AS build
 WORKDIR /app
+ENV GOEXPERIMENT=simd
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 # Gerar índice durante o build (NÃO durante runtime)
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go run ./cmd/build_index/ resources/references.json.gz /index && \
+RUN mkdir -p /index && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go run ./cmd/build_index/ resources/references.json.gz /index/index_p0.bin 0 && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go run ./cmd/build_index/ resources/references.json.gz /index/index_p1.bin 1 && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go run ./cmd/build_index/ resources/references.json.gz /index/index_p2.bin 2 && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go run ./cmd/build_index/ resources/references.json.gz /index/index_p3.bin 3 && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/server && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/lb ./cmd/lb
 
