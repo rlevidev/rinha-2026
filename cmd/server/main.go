@@ -9,13 +9,19 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/rlevidev/rinha-2026/internal/index"
 	"github.com/rlevidev/rinha-2026/internal/vectorize"
 	"golang.org/x/sys/unix"
 )
+
+var readerPool = sync.Pool{
+	New: func() interface{} {
+		return bufio.NewReaderSize(nil, 4096)
+	},
+}
 
 // request JSON structures matching the nested payload format
 type fraudScoreRequest struct {
@@ -117,8 +123,6 @@ func main() {
 	socketPath := os.Args[1]
 	indexDir := os.Args[2]
 
-	fmt.Printf("DEBUG: Server socketPath is: %s\n", socketPath)
-
 	// Load index
 	idx, err := index.LoadSet(indexDir)
 	if err != nil {
@@ -136,14 +140,6 @@ func main() {
 	}
 
 	// Setup socket
-	socketDir := filepath.Dir(socketPath)
-	info, err := os.Stat(socketDir)
-	if err == nil {
-		fmt.Printf("DEBUG: Socket dir %s mode: %v\n", socketDir, info.Mode())
-	} else {
-		fmt.Printf("DEBUG: Failed to stat socket dir %s: %v\n", socketDir, err)
-	}
-
 	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
 		log.Fatalf("Failed to remove existing socket %s: %v", socketPath, err)
 	}
@@ -171,8 +167,6 @@ func main() {
 			log.Printf("Accept error: %v", err)
 			continue
 		}
-		fmt.Printf("LB connected on control fd %d\n", ctrlFd)
-
 		// Loop receiving FDs from this control connection
 		oob := make([]byte, 1024)
 		buf := make([]byte, 1)
@@ -208,12 +202,15 @@ func handleConn(fd int, idx *index.Set, mccRisk vectorize.MCCRisk) {
 	}
 	defer conn.Close()
 
-	reader := bufio.NewReader(conn)
+	reader := readerPool.Get().(*bufio.Reader)
+	reader.Reset(conn)
 	req, err := http.ReadRequest(reader)
 	if err != nil {
+		readerPool.Put(reader)
 		return
 	}
 	defer req.Body.Close()
+	defer readerPool.Put(reader)
 
 	if req.URL.Path == "/ready" {
 		conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"))

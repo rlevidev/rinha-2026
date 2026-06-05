@@ -15,17 +15,9 @@ type Entry struct {
 	Fraud bool
 }
 
-// ClusterCenter stores a cluster centroid and the max squared distance from its entries.
-type ClusterCenter struct {
-	Vec       [14]int16
-	MaxRadius int64
-}
-
 // Partition representa uma partição do índice.
 type Partition struct {
-	entries            []Entry
-	clusterCenters     []ClusterCenter
-	clusterAssignments []uint8
+	entries []Entry
 }
 
 // NPartitions define o espaço de tag de 4 bits.
@@ -46,298 +38,66 @@ func Open(path string) (*Partition, error) {
 	}
 	totalSize := info.Size()
 
-	// Read header: num_clusters as uint64 LE
-	headerBuf := make([]byte, 8)
-	_, err = file.Read(headerBuf)
-	if err != nil {
-		return nil, err
-	}
-	numClusters := binary.LittleEndian.Uint64(headerBuf)
+	entrySize, readOffset := int64(29), int64(0)
 
-	// Sanity check
-	if numClusters > 1024 {
-		return nil, fmt.Errorf("invalid num_clusters: %d", numClusters)
-	}
-
-	var clusterCenters []ClusterCenter
-	const centerStride = 14 * 2 // 28 bytes per center
-	if numClusters > 0 {
-		clusterCenters = make([]ClusterCenter, numClusters)
-		centerBytes := make([]byte, numClusters*centerStride)
-		_, err = file.Read(centerBytes)
-		if err != nil {
+	if totalSize%29 == 0 {
+		// Old format: raw 29-byte entries, no header
+		// (totalSize = n*29)
+	} else if (totalSize-8)%29 == 0 {
+		// New format with 0 clusters: 8-byte header + 29-byte entries
+		readOffset = 8
+		file.Seek(8, 0)
+	} else {
+		// New format with clusters: 8-byte header + K*28 centers + 30-byte entries
+		headerBuf := make([]byte, 8)
+		if _, err := file.Read(headerBuf); err != nil {
 			return nil, err
 		}
-		for i := uint64(0); i < numClusters; i++ {
-			for j := 0; j < 14; j++ {
-				offset := i*centerStride + uint64(j*2)
-				clusterCenters[i].Vec[j] = int16(binary.LittleEndian.Uint16(centerBytes[offset : offset+2]))
-			}
+		numClusters := binary.LittleEndian.Uint64(headerBuf)
+		if numClusters == 0 || numClusters > 1024 {
+			return nil, fmt.Errorf("unknown index file format (size=%d)", totalSize)
+		}
+		entrySize = 30
+		readOffset = 8 + int64(numClusters)*28
+		if _, err := file.Seek(readOffset, 0); err != nil {
+			return nil, err
 		}
 	}
 
-	entrySize := 29
-	if numClusters > 0 {
-		entrySize = 30
+	numEntries := (totalSize - readOffset) / entrySize
+	if numEntries == 0 {
+		return &Partition{entries: []Entry{}}, nil
 	}
-	centersSize := int64(len(clusterCenters)) * centerStride
-	numEntries := int(totalSize-8-centersSize) / entrySize
 
 	entries := make([]Entry, numEntries)
-	var clusterAssignments []uint8
-	if numClusters > 0 {
-		clusterAssignments = make([]uint8, numEntries)
-	}
-
-	buf := make([]byte, entrySize)
-	for i := 0; i < numEntries; i++ {
-		_, err := file.Read(buf)
-		if err != nil {
+	buf := make([]byte, 29)
+	for i := int64(0); i < numEntries; i++ {
+		if _, err := file.Read(buf); err != nil {
 			return nil, err
 		}
-
 		for j := 0; j < 14; j++ {
 			entries[i].Vec[j] = int16(binary.LittleEndian.Uint16(buf[j*2 : j*2+2]))
 		}
 		entries[i].Fraud = (buf[28] == 1)
-		if numClusters > 0 {
-			clusterAssignments[i] = buf[29]
-		}
-	}
-
-	if numClusters > 0 {
-		for i, entry := range entries {
-			c := clusterAssignments[i]
-			if int(c) >= len(clusterCenters) {
-				continue // skip invalid cluster_id (shouldn't happen with correct index)
-			}
-			center := &clusterCenters[c]
-			v := &entry.Vec
-			cv := &center.Vec
-			diff := int64(v[0]) - int64(cv[0])
-			dist := diff * diff
-			diff = int64(v[1]) - int64(cv[1])
-			dist += diff * diff
-			diff = int64(v[2]) - int64(cv[2])
-			dist += diff * diff
-			diff = int64(v[3]) - int64(cv[3])
-			dist += diff * diff
-			diff = int64(v[4]) - int64(cv[4])
-			dist += diff * diff
-			diff = int64(v[5]) - int64(cv[5])
-			dist += diff * diff
-			diff = int64(v[6]) - int64(cv[6])
-			dist += diff * diff
-			diff = int64(v[7]) - int64(cv[7])
-			dist += diff * diff
-			diff = int64(v[8]) - int64(cv[8])
-			dist += diff * diff
-			diff = int64(v[9]) - int64(cv[9])
-			dist += diff * diff
-			diff = int64(v[10]) - int64(cv[10])
-			dist += diff * diff
-			diff = int64(v[11]) - int64(cv[11])
-			dist += diff * diff
-			diff = int64(v[12]) - int64(cv[12])
-			dist += diff * diff
-			diff = int64(v[13]) - int64(cv[13])
-			dist += diff * diff
-			if dist > center.MaxRadius {
-				center.MaxRadius = dist
+		if entrySize == 30 {
+			if _, err := file.Seek(1, 1); err != nil {
+				return nil, err
 			}
 		}
 	}
 
-	return &Partition{
-		entries:            entries,
-		clusterCenters:     clusterCenters,
-		clusterAssignments: clusterAssignments,
-	}, nil
+	return &Partition{entries: entries}, nil
 }
 
 // Search busca os 5 vizinhos mais próximos da query quantizada.
-// Usa early termination em 2 estágios com loop manualmente desenrolado,
-// filtragem geométrica por cluster (triângulo da desigualdade) e fallback para full search.
+// Usa early termination em 2 estágios com loop manualmente desenrolado
+// e hints para eliminar verificações de bounds do compilador.
 func (p *Partition) Search(query *[14]int16) uint8 {
 	q := query
 	_ = q[13]
 	top5dist := [5]int64{1 << 62, 1 << 62, 1 << 62, 1 << 62, 1 << 62}
 	var top5fraud [5]bool
-	var fraudCount uint8
 	entries := p.entries
-
-	if len(p.clusterCenters) > 0 {
-
-		nClusters := len(p.clusterCenters)
-		type cd struct {
-			idx  int
-			dist int64
-		}
-		centersDist := make([]cd, nClusters)
-		for i, cc := range p.clusterCenters {
-			cv := &cc.Vec
-			_ = cv[13]
-			diff := int64(q[0]) - int64(cv[0])
-			d := diff * diff
-			diff = int64(q[1]) - int64(cv[1])
-			d += diff * diff
-			diff = int64(q[2]) - int64(cv[2])
-			d += diff * diff
-			diff = int64(q[3]) - int64(cv[3])
-			d += diff * diff
-			diff = int64(q[4]) - int64(cv[4])
-			d += diff * diff
-			diff = int64(q[5]) - int64(cv[5])
-			d += diff * diff
-			diff = int64(q[6]) - int64(cv[6])
-			d += diff * diff
-			diff = int64(q[7]) - int64(cv[7])
-			d += diff * diff
-			diff = int64(q[8]) - int64(cv[8])
-			d += diff * diff
-			diff = int64(q[9]) - int64(cv[9])
-			d += diff * diff
-			diff = int64(q[10]) - int64(cv[10])
-			d += diff * diff
-			diff = int64(q[11]) - int64(cv[11])
-			d += diff * diff
-			diff = int64(q[12]) - int64(cv[12])
-			d += diff * diff
-			diff = int64(q[13]) - int64(cv[13])
-			d += diff * diff
-			centersDist[i] = cd{idx: i, dist: d}
-		}
-
-		for i := 1; i < nClusters; i++ {
-			j := i
-			for j > 0 && centersDist[j].dist < centersDist[j-1].dist {
-				centersDist[j], centersDist[j-1] = centersDist[j-1], centersDist[j]
-				j--
-			}
-		}
-
-		processedClusters := 0
-		for ci := 0; ci < nClusters; ci++ {
-			c := centersDist[ci]
-			center := &p.clusterCenters[c.idx]
-			minPossible := c.dist - center.MaxRadius
-			if minPossible < 0 {
-				minPossible = 0
-			}
-
-			if minPossible >= top5dist[4] && processedClusters >= 5 {
-				continue
-			}
-
-			for ei := range entries {
-				if p.clusterAssignments[ei] != uint8(c.idx) {
-					continue
-				}
-				e := &entries[ei]
-				v := &e.Vec
-				_ = v[13]
-
-				diff := int64(q[0]) - int64(v[0])
-				partial := diff * diff
-				diff = int64(q[1]) - int64(v[1])
-				partial += diff * diff
-				diff = int64(q[2]) - int64(v[2])
-				partial += diff * diff
-				diff = int64(q[3]) - int64(v[3])
-				partial += diff * diff
-				diff = int64(q[4]) - int64(v[4])
-				partial += diff * diff
-				diff = int64(q[5]) - int64(v[5])
-				partial += diff * diff
-				diff = int64(q[6]) - int64(v[6])
-				partial += diff * diff
-
-				if partial >= top5dist[4] {
-					continue
-				}
-
-				dist := partial
-				diff = int64(q[7]) - int64(v[7])
-				dist += diff * diff
-				diff = int64(q[8]) - int64(v[8])
-				dist += diff * diff
-				diff = int64(q[9]) - int64(v[9])
-				dist += diff * diff
-				diff = int64(q[10]) - int64(v[10])
-				dist += diff * diff
-				diff = int64(q[11]) - int64(v[11])
-				dist += diff * diff
-				diff = int64(q[12]) - int64(v[12])
-				dist += diff * diff
-				diff = int64(q[13]) - int64(v[13])
-				dist += diff * diff
-
-				if dist < top5dist[4] {
-					if dist < top5dist[0] {
-						top5dist[4] = top5dist[3]
-						top5fraud[4] = top5fraud[3]
-						top5dist[3] = top5dist[2]
-						top5fraud[3] = top5fraud[2]
-						top5dist[2] = top5dist[1]
-						top5fraud[2] = top5fraud[1]
-						top5dist[1] = top5dist[0]
-						top5fraud[1] = top5fraud[0]
-						top5dist[0] = dist
-						top5fraud[0] = e.Fraud
-					} else if dist < top5dist[1] {
-						top5dist[4] = top5dist[3]
-						top5fraud[4] = top5fraud[3]
-						top5dist[3] = top5dist[2]
-						top5fraud[3] = top5fraud[2]
-						top5dist[2] = top5dist[1]
-						top5fraud[2] = top5fraud[1]
-						top5dist[1] = dist
-						top5fraud[1] = e.Fraud
-					} else if dist < top5dist[2] {
-						top5dist[4] = top5dist[3]
-						top5fraud[4] = top5fraud[3]
-						top5dist[3] = top5dist[2]
-						top5fraud[3] = top5fraud[2]
-						top5dist[2] = dist
-						top5fraud[2] = e.Fraud
-					} else if dist < top5dist[3] {
-						top5dist[4] = top5dist[3]
-						top5fraud[4] = top5fraud[3]
-						top5dist[3] = dist
-						top5fraud[3] = e.Fraud
-					} else {
-						top5dist[4] = dist
-						top5fraud[4] = e.Fraud
-					}
-				}
-			}
-			processedClusters++
-		}
-
-		fraudCount = 0
-		if top5fraud[0] {
-			fraudCount++
-		}
-		if top5fraud[1] {
-			fraudCount++
-		}
-		if top5fraud[2] {
-			fraudCount++
-		}
-		if top5fraud[3] {
-			fraudCount++
-		}
-		if top5fraud[4] {
-			fraudCount++
-		}
-
-		if fraudCount == 0 || fraudCount == 5 || processedClusters == nClusters {
-			return fraudCount
-		}
-
-		top5dist = [5]int64{1 << 62, 1 << 62, 1 << 62, 1 << 62, 1 << 62}
-		top5fraud = [5]bool{}
-	}
 
 	for i := range entries {
 		e := &entries[i]
@@ -419,7 +179,7 @@ func (p *Partition) Search(query *[14]int16) uint8 {
 		}
 	}
 
-	fraudCount = 0
+	var fraudCount uint8
 	if top5fraud[0] {
 		fraudCount++
 	}

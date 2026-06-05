@@ -2,8 +2,8 @@ package index
 
 import (
 	"encoding/binary"
-	"math/rand"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -56,6 +56,53 @@ func TestOpen(t *testing.T) {
 	}
 }
 
+func TestOpenLegacy(t *testing.T) {
+	// Old format: raw 29-byte entries, no header
+	f, err := os.CreateTemp("", "part_*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(f.Name())
+
+	writeEntry(t, f, [14]int16{10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140}, false)
+	writeEntry(t, f, [14]int16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, true)
+	f.Close()
+
+	p, err := Open(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(p.entries))
+	}
+	if p.entries[0].Fraud != false || p.entries[1].Fraud != true {
+		t.Errorf("fraud flags wrong")
+	}
+	if p.entries[1].Vec[0] != 1 || p.entries[1].Vec[13] != 14 {
+		t.Errorf("Vec values wrong")
+	}
+}
+
+func TestOpenRealFiles(t *testing.T) {
+	files, err := filepath.Glob("../../index/partition_*.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Skip("no index files found")
+	}
+	for _, f := range files {
+		p, err := Open(f)
+		if err != nil {
+			t.Errorf("Open(%s): %v", f, err)
+			continue
+		}
+		if len(p.entries) == 0 {
+			t.Errorf("Open(%s): 0 entries", f)
+		}
+	}
+}
+
 func TestSearch(t *testing.T) {
 	// Dummy Partition
 	p := &Partition{
@@ -75,69 +122,5 @@ func TestSearch(t *testing.T) {
 
 	if fraudCount == 0 {
 		t.Errorf("expected fraud count > 0, got 0")
-	}
-}
-
-func TestClusterSearchExactMatch(t *testing.T) {
-	entries := make([]Entry, 500)
-	rng := rand.New(rand.NewSource(42))
-	for i := 0; i < 250; i++ {
-		for j := 0; j < 14; j++ {
-			entries[i].Vec[j] = 100 + int16(rng.Intn(50))
-		}
-		entries[i].Fraud = i%5 == 0
-	}
-	for i := 250; i < 500; i++ {
-		for j := 0; j < 14; j++ {
-			entries[i].Vec[j] = int16(rng.Intn(50))
-		}
-		entries[i].Fraud = i%5 == 0
-	}
-
-	centers := []ClusterCenter{
-		{Vec: [14]int16{125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125, 125}},
-		{Vec: [14]int16{25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25}},
-	}
-	assignments := make([]uint8, 500)
-	for i := 0; i < 250; i++ {
-		assignments[i] = 0
-		var d int64
-		for j := 0; j < 14; j++ {
-			diff := int64(entries[i].Vec[j]) - int64(centers[0].Vec[j])
-			d += diff * diff
-		}
-		if d > centers[0].MaxRadius {
-			centers[0].MaxRadius = d
-		}
-	}
-	for i := 250; i < 500; i++ {
-		assignments[i] = 1
-		var d int64
-		for j := 0; j < 14; j++ {
-			diff := int64(entries[i].Vec[j]) - int64(centers[1].Vec[j])
-			d += diff * diff
-		}
-		if d > centers[1].MaxRadius {
-			centers[1].MaxRadius = d
-		}
-	}
-
-	clusteredP := &Partition{
-		entries:            entries,
-		clusterCenters:     centers,
-		clusterAssignments: assignments,
-	}
-	plainP := &Partition{entries: entries}
-
-	for i := 0; i < 100; i++ {
-		var query [14]int16
-		for j := 0; j < 14; j++ {
-			query[j] = int16(rng.Intn(150))
-		}
-		r1 := clusteredP.Search(&query)
-		r2 := plainP.Search(&query)
-		if r1 != r2 {
-			t.Errorf("Mismatch for query %v: clustered=%d, plain=%d", query, r1, r2)
-		}
 	}
 }
