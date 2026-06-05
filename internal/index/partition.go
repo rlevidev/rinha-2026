@@ -54,17 +54,23 @@ func Open(path string) (*Partition, error) {
 	}
 	numClusters := binary.LittleEndian.Uint64(headerBuf)
 
+	// Sanity check
+	if numClusters > 1024 {
+		return nil, fmt.Errorf("invalid num_clusters: %d", numClusters)
+	}
+
 	var clusterCenters []ClusterCenter
+	const centerStride = 14 * 2 // 28 bytes per center
 	if numClusters > 0 {
 		clusterCenters = make([]ClusterCenter, numClusters)
-		centerBytes := make([]byte, numClusters*14*2)
+		centerBytes := make([]byte, numClusters*centerStride)
 		_, err = file.Read(centerBytes)
 		if err != nil {
 			return nil, err
 		}
 		for i := uint64(0); i < numClusters; i++ {
 			for j := 0; j < 14; j++ {
-				offset := i*28 + uint64(j*2)
+				offset := i*centerStride + uint64(j*2)
 				clusterCenters[i].Vec[j] = int16(binary.LittleEndian.Uint16(centerBytes[offset : offset+2]))
 			}
 		}
@@ -74,7 +80,7 @@ func Open(path string) (*Partition, error) {
 	if numClusters > 0 {
 		entrySize = 30
 	}
-	centersSize := int64(len(clusterCenters)) * 28
+	centersSize := int64(len(clusterCenters)) * centerStride
 	numEntries := int(totalSize-8-centersSize) / entrySize
 
 	entries := make([]Entry, numEntries)
@@ -93,20 +99,18 @@ func Open(path string) (*Partition, error) {
 		for j := 0; j < 14; j++ {
 			entries[i].Vec[j] = int16(binary.LittleEndian.Uint16(buf[j*2 : j*2+2]))
 		}
+		entries[i].Fraud = (buf[28] == 1)
 		if numClusters > 0 {
-			entries[i].Fraud = (buf[28] == 1)
 			clusterAssignments[i] = buf[29]
-		} else {
-			entries[i].Fraud = (buf[28] == 1)
 		}
 	}
 
 	if numClusters > 0 {
-		for i := range clusterCenters {
-			clusterCenters[i].MaxRadius = 0
-		}
 		for i, entry := range entries {
 			c := clusterAssignments[i]
+			if int(c) >= len(clusterCenters) {
+				continue // skip invalid cluster_id (shouldn't happen with correct index)
+			}
 			center := &clusterCenters[c]
 			v := &entry.Vec
 			cv := &center.Vec
