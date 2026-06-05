@@ -25,6 +25,8 @@ func TestOpen(t *testing.T) {
 	}
 	defer os.Remove(f.Name())
 
+	// Write header: num_clusters = 0 (uint64 LE)
+	binary.Write(f, binary.LittleEndian, uint64(0))
 	// Write 1 entry using the real 29-byte format (14 int16 + 1 byte)
 	writeEntry(f, [14]int16{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14}, true)
 	f.Close()

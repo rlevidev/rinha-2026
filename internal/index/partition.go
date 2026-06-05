@@ -15,15 +15,24 @@ type Entry struct {
 	Fraud bool
 }
 
+// ClusterCenter stores a cluster centroid and the max squared distance from its entries.
+type ClusterCenter struct {
+	Vec       [14]int16
+	MaxRadius int64
+}
+
 // Partition representa uma partição do índice.
 type Partition struct {
-	entries []Entry
+	entries            []Entry
+	clusterCenters     []ClusterCenter
+	clusterAssignments []uint8
 }
 
 // NPartitions define o espaço de tag de 4 bits.
 const NPartitions = 16
 
-// Open lê o arquivo do índice, deserializando as entradas de 29 bytes.
+// Open lê o arquivo do índice, suportando formato legado (sem clustering)
+// e novo formato (com cabeçalho IVF: num_clusters uint64 LE + centros + entradas).
 func Open(path string) (*Partition, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -35,14 +44,46 @@ func Open(path string) (*Partition, error) {
 	if err != nil {
 		return nil, err
 	}
-	size := info.Size()
+	totalSize := info.Size()
 
-	const entrySize = 29
-	numEntries := int(size) / entrySize
+	// Read header: num_clusters as uint64 LE
+	headerBuf := make([]byte, 8)
+	_, err = file.Read(headerBuf)
+	if err != nil {
+		return nil, err
+	}
+	numClusters := binary.LittleEndian.Uint64(headerBuf)
+
+	var clusterCenters []ClusterCenter
+	if numClusters > 0 {
+		clusterCenters = make([]ClusterCenter, numClusters)
+		centerBytes := make([]byte, numClusters*14*2)
+		_, err = file.Read(centerBytes)
+		if err != nil {
+			return nil, err
+		}
+		for i := uint64(0); i < numClusters; i++ {
+			for j := 0; j < 14; j++ {
+				offset := i*28 + uint64(j*2)
+				clusterCenters[i].Vec[j] = int16(binary.LittleEndian.Uint16(centerBytes[offset : offset+2]))
+			}
+		}
+	}
+
+	entrySize := 29
+	if numClusters > 0 {
+		entrySize = 30
+	}
+	centersSize := int64(len(clusterCenters)) * 28
+	numEntries := int(totalSize-8-centersSize) / entrySize
 
 	entries := make([]Entry, numEntries)
-	buf := make([]byte, entrySize)
+	var clusterAssignments []uint8
+	if numClusters > 0 {
+		clusterAssignments = make([]uint8, numEntries)
+	}
 
+	buf := make([]byte, entrySize)
 	for i := 0; i < numEntries; i++ {
 		_, err := file.Read(buf)
 		if err != nil {
@@ -52,11 +93,61 @@ func Open(path string) (*Partition, error) {
 		for j := 0; j < 14; j++ {
 			entries[i].Vec[j] = int16(binary.LittleEndian.Uint16(buf[j*2 : j*2+2]))
 		}
-		entries[i].Fraud = (buf[28] == 1)
+		if numClusters > 0 {
+			entries[i].Fraud = (buf[28] == 1)
+			clusterAssignments[i] = buf[29]
+		} else {
+			entries[i].Fraud = (buf[28] == 1)
+		}
+	}
+
+	if numClusters > 0 {
+		for i := range clusterCenters {
+			clusterCenters[i].MaxRadius = 0
+		}
+		for i, entry := range entries {
+			c := clusterAssignments[i]
+			center := &clusterCenters[c]
+			v := &entry.Vec
+			cv := &center.Vec
+			diff := int64(v[0]) - int64(cv[0])
+			dist := diff * diff
+			diff = int64(v[1]) - int64(cv[1])
+			dist += diff * diff
+			diff = int64(v[2]) - int64(cv[2])
+			dist += diff * diff
+			diff = int64(v[3]) - int64(cv[3])
+			dist += diff * diff
+			diff = int64(v[4]) - int64(cv[4])
+			dist += diff * diff
+			diff = int64(v[5]) - int64(cv[5])
+			dist += diff * diff
+			diff = int64(v[6]) - int64(cv[6])
+			dist += diff * diff
+			diff = int64(v[7]) - int64(cv[7])
+			dist += diff * diff
+			diff = int64(v[8]) - int64(cv[8])
+			dist += diff * diff
+			diff = int64(v[9]) - int64(cv[9])
+			dist += diff * diff
+			diff = int64(v[10]) - int64(cv[10])
+			dist += diff * diff
+			diff = int64(v[11]) - int64(cv[11])
+			dist += diff * diff
+			diff = int64(v[12]) - int64(cv[12])
+			dist += diff * diff
+			diff = int64(v[13]) - int64(cv[13])
+			dist += diff * diff
+			if dist > center.MaxRadius {
+				center.MaxRadius = dist
+			}
+		}
 	}
 
 	return &Partition{
-		entries: entries,
+		entries:            entries,
+		clusterCenters:     clusterCenters,
+		clusterAssignments: clusterAssignments,
 	}, nil
 }
 
