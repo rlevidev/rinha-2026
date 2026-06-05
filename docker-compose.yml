@@ -2,7 +2,7 @@ services:
   lb:
     build:
       context: .
-      target: lb_final
+      target: final
     platform: linux/amd64
     command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
     ports:
@@ -21,7 +21,7 @@ services:
   api1:
     build:
       context: .
-      target: server_final
+      target: final
     platform: linux/amd64
     command: ["/server", "/sockets/api1.sock", "/index"]
     volumes:
@@ -35,7 +35,7 @@ services:
   api2:
     build:
       context: .
-      target: server_final
+      target: final
     platform: linux/amd64
     command: ["/server", "/sockets/api2.sock", "/index"]
     volumes:
