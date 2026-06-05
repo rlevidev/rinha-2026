@@ -1,6 +1,6 @@
 services:
   lb:
-    image: ghcr.io/rlevidev/rinha-2026:eca80db
+    image: ghcr.io/rlevidev/rinha-2026:740afe0
     command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
     ports:
       - "9999:9999"
@@ -16,7 +16,7 @@ services:
           memory: "8MB"
 
   api1:
-    image: ghcr.io/rlevidev/rinha-2026:eca80db
+    image: ghcr.io/rlevidev/rinha-2026:740afe0
     command: ["/server", "/sockets/api1.sock", "/index"]
     volumes:
       - sockets:/sockets
@@ -27,7 +27,7 @@ services:
           memory: "171MB"
 
   api2:
-    image: ghcr.io/rlevidev/rinha-2026:eca80db
+    image: ghcr.io/rlevidev/rinha-2026:740afe0
     command: ["/server", "/sockets/api2.sock", "/index"]
     volumes:
       - sockets:/sockets
