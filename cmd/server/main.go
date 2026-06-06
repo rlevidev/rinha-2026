@@ -374,7 +374,7 @@ func main() {
 	if err != nil {
 		die("error: epoll_create1 failed")
 	}
-// 	netx.SetEpollBusyPoll(epollFD)
+	netx.SetEpollBusyPoll(epollFD)
 	if err := unix.EpollCtl(epollFD, unix.EPOLL_CTL_ADD, ctrlFD,
 		&unix.EpollEvent{Events: epollIn, Fd: int32(ctrlFD)}); err != nil {
 		die("error: epoll_ctl add ctrl failed")
