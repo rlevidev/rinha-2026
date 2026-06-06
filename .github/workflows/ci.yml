@@ -63,69 +63,67 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          cat <<EOF > docker-compose.yml
-x-go: &go
-  platform: linux/amd64
-  restart: unless-stopped
-  ulimits:
-    memlock: -1
-    nofile:
-      soft: 65535
-      hard: 65535
-
-services:
-  lb:
-    <<: *go
-    image: ghcr.io/${REPO}:${SHA_SHORT}
-    cpuset: "2,3"
-    command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
-    ports:
-      - "9999:9999"
-    volumes:
-      - sockets:/sockets
-    depends_on:
-      - api1
-      - api2
-    deploy:
-      resources:
-        limits:
-          cpus: "0.05"
-          memory: "8MB"
-
-  api1:
-    <<: *go
-    image: ghcr.io/${REPO}:${SHA_SHORT}
-    cpuset: "0"
-    command: ["/server", "/sockets/api1.sock", "/index"]
-    volumes:
-      - sockets:/sockets
-    deploy:
-      resources:
-        limits:
-          cpus: "0.475"
-          memory: "171MB"
-
-  api2:
-    <<: *go
-    image: ghcr.io/${REPO}:${SHA_SHORT}
-    cpuset: "1"
-    command: ["/server", "/sockets/api2.sock", "/index"]
-    volumes:
-      - sockets:/sockets
-    deploy:
-      resources:
-        limits:
-          cpus: "0.475"
-          memory: "171MB"
-
-volumes:
-  sockets:
-    driver: local
-    driver_opts:
-      type: tmpfs
-      device: tmpfs
-      o: size=4m,mode=0777
-EOF
+          echo "x-go: &go" > docker-compose.yml
+          echo "  platform: linux/amd64" >> docker-compose.yml
+          echo "  restart: unless-stopped" >> docker-compose.yml
+          echo "  ulimits:" >> docker-compose.yml
+          echo "    memlock: -1" >> docker-compose.yml
+          echo "    nofile:" >> docker-compose.yml
+          echo "      soft: 65535" >> docker-compose.yml
+          echo "      hard: 65535" >> docker-compose.yml
+          echo "" >> docker-compose.yml
+          echo "services:" >> docker-compose.yml
+          echo "  lb:" >> docker-compose.yml
+          echo "    <<: *go" >> docker-compose.yml
+          echo "    image: ghcr.io/${REPO}:${SHA_SHORT}" >> docker-compose.yml
+          echo "    cpuset: \"2,3\"" >> docker-compose.yml
+          echo "    command: [\"/lb\", \"9999\", \"/sockets/api1.sock\", \"/sockets/api2.sock\"]" >> docker-compose.yml
+          echo "    ports:" >> docker-compose.yml
+          echo "      - \"9999:9999\"" >> docker-compose.yml
+          echo "    volumes:" >> docker-compose.yml
+          echo "      - sockets:/sockets" >> docker-compose.yml
+          echo "    depends_on:" >> docker-compose.yml
+          echo "      - api1" >> docker-compose.yml
+          echo "      - api2" >> docker-compose.yml
+          echo "    deploy:" >> docker-compose.yml
+          echo "      resources:" >> docker-compose.yml
+          echo "        limits:" >> docker-compose.yml
+          echo "          cpus: \"0.05\"" >> docker-compose.yml
+          echo "          memory: \"8MB\"" >> docker-compose.yml
+          echo "" >> docker-compose.yml
+          echo "  api1:" >> docker-compose.yml
+          echo "    <<: *go" >> docker-compose.yml
+          echo "    image: ghcr.io/${REPO}:${SHA_SHORT}" >> docker-compose.yml
+          echo "    cpuset: \"0\"" >> docker-compose.yml
+          echo "    command: [\"/server\", \"/sockets/api1.sock\", \"/index\"]" >> docker-compose.yml
+          echo "    volumes:" >> docker-compose.yml
+          echo "      - sockets:/sockets" >> docker-compose.yml
+          echo "    deploy:" >> docker-compose.yml
+          echo "      resources:" >> docker-compose.yml
+          echo "        limits:" >> docker-compose.yml
+          echo "          cpus: \"0.475\"" >> docker-compose.yml
+          echo "          memory: \"171MB\"" >> docker-compose.yml
+          echo "" >> docker-compose.yml
+          echo "  api2:" >> docker-compose.yml
+          echo "    <<: *go" >> docker-compose.yml
+          echo "    image: ghcr.io/${REPO}:${SHA_SHORT}" >> docker-compose.yml
+          echo "    cpuset: \"1\"" >> docker-compose.yml
+          echo "    command: [\"/server\", \"/sockets/api2.sock\", \"/index\"]" >> docker-compose.yml
+          echo "    volumes:" >> docker-compose.yml
+          echo "      - sockets:/sockets" >> docker-compose.yml
+          echo "    deploy:" >> docker-compose.yml
+          echo "      resources:" >> docker-compose.yml
+          echo "        limits:" >> docker-compose.yml
+          echo "          cpus: \"0.475\"" >> docker-compose.yml
+          echo "          memory: \"171MB\"" >> docker-compose.yml
+          echo "" >> docker-compose.yml
+          echo "volumes:" >> docker-compose.yml
+          echo "  sockets:" >> docker-compose.yml
+          echo "    driver: local" >> docker-compose.yml
+          echo "    driver_opts:" >> docker-compose.yml
+          echo "      type: tmpfs" >> docker-compose.yml
+          echo "      device: tmpfs" >> docker-compose.yml
+          echo "      o: size=4m,mode=0777" >> docker-compose.yml
 
           if ! git diff --quiet; then
             git add docker-compose.yml
