@@ -4,6 +4,7 @@ services:
       context: .
       target: final
     platform: linux/amd64
+    cpuset: "2,3"
     command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
     ports:
       - "9999:9999"
@@ -23,6 +24,7 @@ services:
       context: .
       target: final
     platform: linux/amd64
+    cpuset: "0"
     command: ["/server", "/sockets/api1.sock", "/index"]
     volumes:
       - sockets:/sockets
@@ -37,6 +39,7 @@ services:
       context: .
       target: final
     platform: linux/amd64
+    cpuset: "1"
     command: ["/server", "/sockets/api2.sock", "/index"]
     volumes:
       - sockets:/sockets
