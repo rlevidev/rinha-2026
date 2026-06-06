@@ -45,9 +45,9 @@ func listenTCP(port int) (int, error) {
 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 	unix.SetsockoptInt(fd, unix.SOL_TCP, unix.TCP_DEFER_ACCEPT, 1)
-// 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_BUSY_POLL, 50)
-// 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PREFER_BUSY_POLL, 1)
-// 	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_BUSY_POLL_BUDGET, 8)
+	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_BUSY_POLL, 50)
+	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_PREFER_BUSY_POLL, 1)
+	unix.SetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_BUSY_POLL_BUDGET, 8)
 	unix.SetsockoptInt(fd, unix.SOL_TCP, tcpFastOpen, 256)
 
 	addr := &unix.SockaddrInet4{Port: port} // Addr zero = INADDR_ANY
@@ -179,7 +179,7 @@ func main() {
 	if err != nil {
 		die("lb: epoll_create1 failed")
 	}
-// 	netx.SetEpollBusyPoll(epfd)
+	netx.SetEpollBusyPoll(epfd)
 	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, listenFD,
 		&unix.EpollEvent{Events: epollIn | epollEt, Fd: int32(listenFD)}); err != nil {
 		die("lb: epoll_ctl add listen failed")
