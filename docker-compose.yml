@@ -1,9 +1,18 @@
+x-go: &go
+  platform: linux/amd64
+  restart: unless-stopped
+  ulimits:
+    memlock: -1
+    nofile:
+      soft: 65535
+      hard: 65535
+
 services:
   lb:
+    <<: *go
     build:
       context: .
       target: final
-    platform: linux/amd64
     cpuset: "2,3"
     command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
     ports:
@@ -20,10 +29,10 @@ services:
           memory: "8MB"
 
   api1:
+    <<: *go
     build:
       context: .
       target: final
-    platform: linux/amd64
     cpuset: "0"
     command: ["/server", "/sockets/api1.sock", "/index"]
     volumes:
@@ -35,10 +44,10 @@ services:
           memory: "171MB"
 
   api2:
+    <<: *go
     build:
       context: .
       target: final
-    platform: linux/amd64
     cpuset: "1"
     command: ["/server", "/sockets/api2.sock", "/index"]
     volumes:
