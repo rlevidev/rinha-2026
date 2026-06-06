@@ -63,7 +63,69 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           
-          printf "services:\n  lb:\n    image: ghcr.io/${REPO}:${SHA_SHORT}\n    command: [\"/lb\", \"9999\", \"/sockets/api1.sock\", \"/sockets/api2.sock\"]\n    ports:\n      - \"9999:9999\"\n    volumes:\n      - sockets:/sockets\n    depends_on:\n      - api1\n      - api2\n    deploy:\n      resources:\n        limits:\n          cpus: \"0.05\"\n          memory: \"8MB\"\n\n  api1:\n    image: ghcr.io/${REPO}:${SHA_SHORT}\n    command: [\"/server\", \"/sockets/api1.sock\", \"/index\"]\n    volumes:\n      - sockets:/sockets\n    deploy:\n      resources:\n        limits:\n          cpus: \"0.475\"\n          memory: \"171MB\"\n\n  api2:\n    image: ghcr.io/${REPO}:${SHA_SHORT}\n    command: [\"/server\", \"/sockets/api2.sock\", \"/index\"]\n    volumes:\n      - sockets:/sockets\n    deploy:\n      resources:\n        limits:\n          cpus: \"0.475\"\n          memory: \"171MB\"\n\nvolumes:\n  sockets:\n    driver: local\n    driver_opts:\n      type: tmpfs\n      device: tmpfs\n      o: size=4m,mode=0777\n" > docker-compose.yml
+          cat <<EOF > docker-compose.yml
+x-go: &go
+  platform: linux/amd64
+  restart: unless-stopped
+  ulimits:
+    memlock: -1
+    nofile:
+      soft: 65535
+      hard: 65535
+
+services:
+  lb:
+    <<: *go
+    image: ghcr.io/${REPO}:${SHA_SHORT}
+    cpuset: "2,3"
+    command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
+    ports:
+      - "9999:9999"
+    volumes:
+      - sockets:/sockets
+    depends_on:
+      - api1
+      - api2
+    deploy:
+      resources:
+        limits:
+          cpus: "0.05"
+          memory: "8MB"
+
+  api1:
+    <<: *go
+    image: ghcr.io/${REPO}:${SHA_SHORT}
+    cpuset: "0"
+    command: ["/server", "/sockets/api1.sock", "/index"]
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.475"
+          memory: "171MB"
+
+  api2:
+    <<: *go
+    image: ghcr.io/${REPO}:${SHA_SHORT}
+    cpuset: "1"
+    command: ["/server", "/sockets/api2.sock", "/index"]
+    volumes:
+      - sockets:/sockets
+    deploy:
+      resources:
+        limits:
+          cpus: "0.475"
+          memory: "171MB"
+
+volumes:
+  sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=4m,mode=0777
+EOF
 
           if ! git diff --quiet; then
             git add docker-compose.yml
