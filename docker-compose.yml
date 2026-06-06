@@ -1,6 +1,17 @@
+x-go: &go
+  platform: linux/amd64
+  restart: unless-stopped
+  ulimits:
+    memlock: -1
+    nofile:
+      soft: 65535
+      hard: 65535
+
 services:
   lb:
-    image: ghcr.io/rlevidev/rinha-2026:1a8ab00
+    <<: *go
+    image: ghcr.io/rlevidev/rinha-2026:f113e46
+    cpuset: "2,3"
     command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
     ports:
       - "9999:9999"
@@ -16,7 +27,9 @@ services:
           memory: "8MB"
 
   api1:
-    image: ghcr.io/rlevidev/rinha-2026:1a8ab00
+    <<: *go
+    image: ghcr.io/rlevidev/rinha-2026:f113e46
+    cpuset: "0"
     command: ["/server", "/sockets/api1.sock", "/index"]
     volumes:
       - sockets:/sockets
@@ -27,7 +40,9 @@ services:
           memory: "171MB"
 
   api2:
-    image: ghcr.io/rlevidev/rinha-2026:1a8ab00
+    <<: *go
+    image: ghcr.io/rlevidev/rinha-2026:f113e46
+    cpuset: "1"
     command: ["/server", "/sockets/api2.sock", "/index"]
     volumes:
       - sockets:/sockets
