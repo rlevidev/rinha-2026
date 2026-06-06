@@ -12,9 +12,16 @@ var (
 
 // InitMCCRisk loads the MCC risk overrides from the given JSON file path.
 func InitMCCRisk(path string) error {
+	// Try the absolute path first. If it doesn't exist, fallback to relative path.
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		b, err = os.ReadFile("resources/mcc_risk.json")
+		if err != nil {
+			b, err = os.ReadFile("../resources/mcc_risk.json")
+			if err != nil {
+				return err
+			}
+		}
 	}
 	var raw map[string]float64
 	if err := json.Unmarshal(b, &raw); err != nil {
