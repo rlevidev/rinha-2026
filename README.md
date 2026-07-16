@@ -54,34 +54,65 @@ make logs
 | (Nota: Configuração de runtime é via argumentos de linha de comando e volumes montados, não variáveis de ambiente.) |
 
 ## Arquitetura
-```
-┌─────────────────┐    SCM_RIGHTS    ┌──────────────┐    SCM_RIGHTS    ┌──────────────┐
-│   Load Balancer │◄───────┐   ┌────►│   API Worker 1│◄───────┐   ┌────►│   API Worker 2│
-│   (lb)          │        │   │    │  (server)     │        │   │    │  (server)     │
-│                 │   ┌────┴───┤    │               │        │   │    │               │
-│ 0.05 CPU, 8MB   │   │        │    │ 0.475 CPU,    │        │   │    │ 0.475 CPU,    │
-│                 │   │ 171MB  │    │ 171MB         │        │   │    │ 171MB         │
-└─────────────────┘   │        │    │               │        │   │    │               │
-                      │        ▼    │               │        ▼   │    │               │
-                      │  ┌──────────┴───────────────┴──────────┴────┴──────────────┐ │
-                      │  │                    Shared Index (read-only)             │ │
-                      │  │                                                        │ │
-                      │  │  /index/                                               │ │
-                      │  │  ├── index_p0.bin  (card_present=0, is_online=0)      │ │
-                      │  │  ├── index_p1.bin  (card_present=0, is_online=1)      │ │
-                      │  │  ├── index_p2.bin  (card_present=1, is_online=0)      │ │
-                      │  │  ├── index_p3.bin  (card_present=1, is_online=1)      │ │
-                      │  │  ├── index_p4.bin  (!known_merchant, has_last_tx=0)   │ │
-                      │  │  ├── index_p5.bin  (!known_merchant, has_last_tx=1)   │ │
-                      │  │  ├── index_p6.bin  (known_merchant, has_last_tx=0)    │ │
-                      │  │  ├── index_p7.bin  (known_merchant, has_last_tx=1)    │ │
-                      │  │  ├── index_p8.bin  (unknown_merchant, has_last_tx=0)  │ │
-                      │  │  └── ...                                               │ │
-                      │  └────────────────────────────────────────────────────────┘ │
-                      │                                                            │
-                      │  0.475 CPU, 171MB       0.475 CPU, 171MB                   │
-                      │                                                            │
-                      └────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph LB["Load Balancer"]
+        direction TB
+        lb[lb<br/>0.05 CPU, 8MB]
+        style lb fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#1565c0
+    end
+    
+    subgraph Workers["API Workers"]
+        direction TB
+        subgraph Worker1["API Worker 1"]
+            direction TB
+            server1[server<br/>0.475 CPU, 171MB]
+            style server1 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#ef6c00
+        end
+        subgraph Worker2["API Worker 2"]
+            direction TB
+            server2[server<br/>0.475 CPU, 171MB]
+            style server2 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#ef6c00
+        end
+    end
+    
+    subgraph Index["Shared Index (read-only)"]
+        direction TB
+        index["/index/"]
+        style index fill:#f1f8e9,stroke:#33691e,stroke-width:2px,color:#33691e
+        subgraph Partitions["Partitions"]
+            direction TB
+            p0[index_p0.bin]
+            p1[index_p1.bin]
+            p2[index_p2.bin]
+            p3[index_p3.bin]
+            p4[index_p4.bin]
+            p5[index_p5.bin]
+            p6[index_p6.bin]
+            p7[index_p7.bin]
+            p8[index_p8.bin]
+            p9[index_p9.bin]
+            p10[index_p10.bin]
+            p11[index_p11.bin]
+            style p0 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p1 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p2 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p3 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p4 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p5 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p6 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p7 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p8 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p9 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p10 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p11 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+        end
+    end
+    
+    lb -->|SCM_RIGHTS| server1
+    lb -->|SCM_RIGHTS| server2
+    server1 -->|reads| index
+    server2 -->|reads| index
 ```
 
 ## Desenvolvimento
