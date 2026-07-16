@@ -56,31 +56,31 @@ make logs
 ## Arquitetura
 ```mermaid
 flowchart TB
-    subgraph LB[Load Balancer]
+    subgraph LB["Load Balancer"]
         direction TB
         lb[lb<br/>0.05 CPU, 8MB]
         style lb fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
     end
     
-    subgraph Workers[API Workers]
+    subgraph Workers["API Workers"]
         direction TB
-        subgraph Worker1[API Worker 1]
+        subgraph Worker1["API Worker 1"]
             direction TB
             server1[server<br/>0.475 CPU, 171MB]
             style server1 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
         end
-        subgraph Worker2[API Worker 2]
+        subgraph Worker2["API Worker 2"]
             direction TB
             server2[server<br/>0.475 CPU, 171MB]
             style server2 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
         end
     end
     
-    subgraph Index[Shared Index (read-only)]
+    subgraph Index["Shared Index (read-only)"]
         direction TB
-        index[/index/]
+        index["/index/"]
         style index fill:#f1f8e9,stroke:#33691e,stroke-width:2px
-        subgraph Partitions[Partitions]
+        subgraph Partitions["Partitions"]
             direction TB
             p0[index_p0.bin]
             p1[index_p1.bin]
