@@ -59,7 +59,7 @@ flowchart TB
     subgraph LB["Load Balancer"]
         direction TB
         lb[lb<br/>0.05 CPU, 8MB]
-        style lb fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+        style lb fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#1565c0
     end
     
     subgraph Workers["API Workers"]
@@ -67,19 +67,19 @@ flowchart TB
         subgraph Worker1["API Worker 1"]
             direction TB
             server1[server<br/>0.475 CPU, 171MB]
-            style server1 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+            style server1 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#ef6c00
         end
         subgraph Worker2["API Worker 2"]
             direction TB
             server2[server<br/>0.475 CPU, 171MB]
-            style server2 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+            style server2 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#ef6c00
         end
     end
     
     subgraph Index["Shared Index (read-only)"]
         direction TB
         index["/index/"]
-        style index fill:#f1f8e9,stroke:#33691e,stroke-width:2px
+        style index fill:#f1f8e9,stroke:#33691e,stroke-width:2px,color:#33691e
         subgraph Partitions["Partitions"]
             direction TB
             p0[index_p0.bin]
@@ -94,18 +94,18 @@ flowchart TB
             p9[index_p9.bin]
             p10[index_p10.bin]
             p11[index_p11.bin]
-            style p0 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p1 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p2 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p3 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p4 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p5 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p6 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p7 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p8 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p9 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p10 fill:#f9f9f9,stroke:#333,stroke-width:1px
-            style p11 fill:#f9f9f9,stroke:#333,stroke-width:1px
+            style p0 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p1 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p2 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p3 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p4 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p5 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p6 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p7 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p8 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p9 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p10 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p11 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
         end
     end
     
