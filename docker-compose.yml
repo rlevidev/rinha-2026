@@ -10,7 +10,7 @@ x-go: &go
 services:
   lb:
     <<: *go
-    image: ghcr.io/rlevidev/rinha-2026:46caa7e
+    image: ghcr.io/rlevidev/rinha-2026:9823cee
     cpuset: "2,3"
     command: ["/lb", "9999", "/sockets/api1.sock", "/sockets/api2.sock"]
     ports:
@@ -28,7 +28,7 @@ services:
 
   api1:
     <<: *go
-    image: ghcr.io/rlevidev/rinha-2026:46caa7e
+    image: ghcr.io/rlevidev/rinha-2026:9823cee
     cpuset: "0"
     command: ["/server", "/sockets/api1.sock", "/index"]
     volumes:
@@ -41,7 +41,7 @@ services:
 
   api2:
     <<: *go
-    image: ghcr.io/rlevidev/rinha-2026:46caa7e
+    image: ghcr.io/rlevidev/rinha-2026:9823cee
     cpuset: "1"
     command: ["/server", "/sockets/api2.sock", "/index"]
     volumes:
