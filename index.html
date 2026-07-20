@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en" id="html-root">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rinha de Backend 2026 · Raí Levi</title>
+<meta name="description" content="Fraud-detection API built for Rinha de Backend 2026. Vector similarity search in Go under strict CPU/memory limits.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0d12;
+    --surface: #12151c;
+    --border: #20242e;
+    --border-strong: #2c313d;
+    --text: #e8eaf0;
+    --text-muted: #838b9c;
+    --text-faint: #545b6b;
+    --accent: #5eead4;
+    --accent-dim: #2f4a46;
+    --status-idle: #64748b;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --font-sans: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --max-width: 860px;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 16px;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 64px 64px;
+    opacity: 0.15;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  body::after {
+    content: "";
+    position: fixed; inset: -10%;
+    background:
+      radial-gradient(46rem 32rem at 15% 12%, rgba(94,234,212,0.10), transparent 60%),
+      radial-gradient(38rem 30rem at 85% 68%, rgba(52,211,153,0.07), transparent 60%);
+    filter: blur(10px);
+    pointer-events: none;
+    z-index: 0;
+    animation: drift 26s ease-in-out infinite alternate;
+  }
+
+  @keyframes drift {
+    0%   { transform: translate(0,0) scale(1); }
+    50%  { transform: translate(-2%,3%) scale(1.05); }
+    100% { transform: translate(3%,-2%) scale(1); }
+  }
+
+  a { color: inherit; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+  .wrap {
+    position: relative; z-index: 1;
+    max-width: var(--max-width);
+    margin: 0 auto;
+    padding: 0 clamp(24px, 4vw, 48px);
+  }
+
+  /* nav */
+  .nav {
+    padding: 22px 0;
+    display: flex; justify-content: space-between; align-items: center;
+    border-bottom: 1px solid var(--border);
+  }
+  .nav a {
+    font-family: var(--font-mono); font-size: 13px;
+    color: var(--text-faint); text-decoration: none;
+    transition: color 0.15s;
+  }
+  .nav a:hover { color: var(--accent); }
+
+  /* lang switch */
+  .nav-right { display: flex; align-items: center; gap: 20px; }
+  .lang-switch {
+    display: inline-flex; align-items: center; gap: 1px;
+    font-family: var(--font-mono); font-size: 12px;
+  }
+  .lang-btn {
+    background: none; border: none; cursor: pointer;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--text-faint); padding: 3px 6px; border-radius: 4px;
+    transition: color 0.15s, background 0.15s;
+  }
+  .lang-btn:hover { color: var(--accent); }
+  .lang-btn.active { color: var(--accent); background: var(--accent-dim); }
+  .lang-sep { color: var(--border-strong); font-size: 11px; }
+
+
+  /* hero */
+  .page-hero {
+    padding: 48px 0 40px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--status-idle); margin-bottom: 20px;
+  }
+  .badge .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor; flex-shrink: 0;
+  }
+
+  .page-title {
+    font-family: var(--font-mono); font-weight: 700;
+    font-size: clamp(1.7rem, 3.5vw, 2.8rem);
+    line-height: 1.15; letter-spacing: -0.01em;
+    margin: 0 0 10px;
+  }
+
+  .page-sub {
+    font-family: var(--font-mono); font-size: 14px;
+    color: var(--accent); margin: 0 0 18px;
+  }
+
+  .page-desc {
+    color: var(--text-muted); font-size: 15px;
+    max-width: 58ch; margin: 0 0 22px;
+  }
+
+  /* badges row */
+  .shields { display: flex; flex-wrap: wrap; gap: 8px; }
+  .shields img { height: 20px; }
+
+  /* readme content */
+  .content { padding: 44px 0 72px; }
+
+  #readme h1 { display: none; }
+
+  #readme h2 {
+    font-family: var(--font-mono); font-weight: 600; font-size: 1rem;
+    color: var(--text); border-bottom: 1px solid var(--border);
+    padding-bottom: 10px; margin: 52px 0 18px;
+  }
+
+  #readme h3 {
+    font-family: var(--font-mono); font-size: 0.9rem; font-weight: 600;
+    color: var(--accent); margin: 32px 0 12px;
+  }
+
+  #readme h4 {
+    font-family: var(--font-mono); font-size: 0.85rem; font-weight: 500;
+    color: var(--text-muted); margin: 24px 0 10px;
+  }
+
+  #readme p { color: var(--text-muted); margin: 0 0 16px; }
+  #readme strong { color: var(--text); font-weight: 500; }
+
+  #readme a { color: var(--accent); text-decoration: none; }
+  #readme a:hover { text-decoration: underline; }
+
+  /* hide the shields paragraph — rendered separately in hero */
+  #readme p:first-of-type img[src*="shields.io"],
+  #readme p:first-of-type img[src*="img.shields"] {
+    display: none;
+  }
+
+  #readme code {
+    font-family: var(--font-mono); font-size: 13px;
+    background: var(--surface); border: 1px solid var(--border-strong);
+    border-radius: 4px; padding: 2px 6px; color: var(--accent);
+  }
+
+  #readme pre {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 20px 22px;
+    overflow-x: auto; margin: 0 0 24px;
+  }
+  #readme pre code {
+    background: none; border: none; padding: 0;
+    color: var(--text-muted); font-size: 13px; line-height: 1.6;
+  }
+
+  #readme table {
+    width: 100%; border-collapse: collapse;
+    font-family: var(--font-mono); font-size: 13px; margin: 0 0 28px;
+  }
+  #readme th {
+    text-align: left; color: var(--text-faint);
+    border-bottom: 1px solid var(--border-strong);
+    padding: 8px 14px; font-weight: 500;
+  }
+  #readme td {
+    color: var(--text-muted); border-bottom: 1px solid var(--border);
+    padding: 8px 14px; vertical-align: top;
+  }
+  #readme tr:last-child td { border-bottom: none; }
+
+  #readme ul, #readme ol {
+    color: var(--text-muted); padding-left: 22px; margin: 0 0 16px;
+  }
+  #readme li { margin-bottom: 6px; }
+
+  #readme blockquote {
+    border-left: 3px solid var(--accent);
+    margin: 0 0 20px; padding: 6px 0 6px 20px;
+    color: var(--text-muted);
+  }
+  #readme blockquote p { margin: 0; }
+
+  #readme hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+
+  /* mermaid */
+  .mermaid-wrap {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 28px 24px; margin: 0 0 28px;
+    overflow-x: auto; display: flex; justify-content: center;
+  }
+  .mermaid-wrap svg { max-width: 100%; height: auto; }
+
+  /* footer */
+  footer {
+    padding: 32px 0 56px;
+    display: flex; justify-content: space-between;
+    align-items: center; flex-wrap: wrap; gap: 12px;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--text-faint); border-top: 1px solid var(--border);
+  }
+  footer a { color: var(--text-faint); text-decoration: none; }
+  footer a:hover { color: var(--accent); }
+
+  @media (prefers-reduced-motion: reduce) { body::after { animation: none; } }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════════════════ English README ══════════════════════════════ -->
+<script type="text/markdown" id="readme-en">
+# rinha-2026
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)
+![GOEXPERIMENT](https://img.shields.io/badge/GOEXPERIMENT-simd-blueviolet)
+![Ranking](https://img.shields.io/badge/Rinha%202026-30%C2%BA%20lugar-gold)
+![Score](https://img.shields.io/badge/Score-5.819,38-brightgreen)
+
+> Fraud detection service with vector search for Rinha de Backend 2026.
+
+## About
+Fraud detection service written in Go 1.26 with a SIMD-optimized IVF k-NN vector search engine.
+Processes fraud scores for credit card transactions by vectorizing features and performing
+approximate nearest neighbor search against a pre-computed dataset of 100k transactions,
+designed for the constraints of Rinha de Backend 2026.
+
+## Installation
+
+### Prerequisites
+- Go 1.26+ with `GOEXPERIMENT=simd` enabled
+- CPU with AVX2 support (required for SIMD kernels)
+- Docker (to test production configuration)
+- Linux with `CAP_SYS_NICE` and `CAP_IPC_LOCK` capabilities (required for `SCHED_FIFO`
+  real-time priority and `mlockall` memory locking outside Docker)
+- Make (optional, for convenience commands)
+
+```bash
+# Enable Go experiments
+export GOEXPERIMENT=simd
+
+# Clone repository
+git clone https://github.com/rlevidev/rinha-2026.git
+cd rinha-2026
+
+# Download dependencies
+go mod download
+```
+
+## Usage
+```bash
+# Build all binaries
+make build
+
+# Start development environment (LB + 2 API workers)
+make dev-up
+
+# Send a test request to the local service
+make test-request
+
+# View service logs
+make logs
+```
+
+## Environment Variables
+| Key          | Default | Description                              |
+|--------------|---------|------------------------------------------|
+| GOEXPERIMENT | simd    | Enable Go experiments for SIMD support   |
+
+(Note: Runtime configuration is via command-line arguments and mounted volumes, not environment variables.)
+
+## Architecture
+```mermaid
+flowchart TB
+    subgraph LB["Load Balancer"]
+        direction TB
+        lb[lb<br/>0.05 CPU, 8MB]
+        style lb fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#1565c0
+    end
+
+    subgraph Workers["API Workers"]
+        direction TB
+        subgraph Worker1["API Worker 1"]
+            direction TB
+            server1[server<br/>0.475 CPU, 171MB]
+            style server1 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#ef6c00
+        end
+        subgraph Worker2["API Worker 2"]
+            direction TB
+            server2[server<br/>0.475 CPU, 171MB]
+            style server2 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#ef6c00
+        end
+    end
+
+    subgraph Index["Shared Index (read-only)"]
+        direction TB
+        index["/index/"]
+        style index fill:#f1f8e9,stroke:#33691e,stroke-width:2px,color:#33691e
+        subgraph Partitions["Partitions"]
+            direction TB
+            p0[index_p0.bin]
+            p1[index_p1.bin]
+            p2[index_p2.bin]
+            p3[index_p3.bin]
+            p4[index_p4.bin]
+            p5[index_p5.bin]
+            p6[index_p6.bin]
+            p7[index_p7.bin]
+            p8[index_p8.bin]
+            p9[index_p9.bin]
+            p10[index_p10.bin]
+            p11[index_p11.bin]
+            style p0 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p1 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p2 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p3 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p4 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p5 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p6 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p7 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p8 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p9 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p10 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p11 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+        end
+    end
+
+    lb -->|SCM_RIGHTS| server1
+    lb -->|SCM_RIGHTS| server2
+    server1 -->|reads| index
+    server2 -->|reads| index
+```
+
+## Development
+### Running tests
+```bash
+# Run all tests with race detector
+go test -race ./...
+
+# Run tests for a specific package
+go test -race ./internal/fraud
+go test -race ./internal/index
+```
+
+### Running benchmarks
+```bash
+# Run benchmarks
+go test -bench=. ./...
+
+# Run benchmarks with memory allocation profiling
+go test -bench=. -benchmem ./...
+```
+
+### Development environment
+```bash
+# Start development environment (LB + 2 API workers)
+make dev-up
+
+# Stop development environment
+make down
+```
+
+## License
+This project is licensed under the MIT License. See the [LICENSE](./LICENSE) file for details.
+</script>
+
+<!-- ══════════════════════════════ Portuguese README ═════════════════════════════ -->
+<!-- README source embedded — update this block when README changes -->
+<script type="text/markdown" id="readme-pt">
+# rinha-2026
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go)
+![GOEXPERIMENT](https://img.shields.io/badge/GOEXPERIMENT-simd-blueviolet)
+![Ranking](https://img.shields.io/badge/Rinha%202026-30%C2%BA%20lugar-gold)
+![Score](https://img.shields.io/badge/Score-5.819,38-brightgreen)
+
+> Serviço de detecção de fraude com busca vetorial para Rinha de Backend 2026.
+
+## Sobre
+Serviço de detecção de fraude escrito em Go 1.26 com mecanismo de busca vetorial IVF k-NN otimizado com SIMD.
+Processa scores de fraude de transações de cartão de crédito vetorizando características e realizando busca por vizinhos mais próximos aproximados
+em um dataset pré-computado de 100k transações, projetado para as restrições da Rinha de Backend 2026.
+
+## Instalação
+
+### Pré-requisitos
+- Go 1.26+ com `GOEXPERIMENT=simd` habilitado
+- CPU com suporte a AVX2 (necessário para kernels SIMD)
+- Docker (para testar configuração de produção)
+- Linux com capacidades `CAP_SYS_NICE` e `CAP_IPC_LOCK` (necessário para prioridade em tempo real `SCHED_FIFO` e travamento de memória `mlockall` fora do Docker)
+- Make (opcional, para comandos de conveniência)
+
+```bash
+# Ativar experimentos do Go
+export GOEXPERIMENT=simd
+
+# Clonar repositório
+git clone https://github.com/rlevidev/rinha-2026.git
+cd rinha-2026
+
+# Baixar dependências
+go mod download
+```
+
+## Uso
+```bash
+# Construir todos os binários
+make build
+
+# Iniciar ambiente de desenvolvimento (LB + 2 workers de API)
+make dev-up
+
+# Enviar requisição de teste para o serviço local
+make test-request
+
+# Visualizar logs do serviço
+make logs
+```
+
+## Variáveis de Ambiente
+| Chave               | Valor Padrão | Descrição                                  |
+|---------------------|--------------|--------------------------------------------|
+| GOEXPERIMENT        | simd         | Ativar experimentos do Go para suporte a SIMD |
+| (Nota: Configuração de runtime é via argumentos de linha de comando e volumes montados, não variáveis de ambiente.) |
+
+## Arquitetura
+```mermaid
+flowchart TB
+    subgraph LB["Load Balancer"]
+        direction TB
+        lb[lb<br/>0.05 CPU, 8MB]
+        style lb fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#1565c0
+    end
+    
+    subgraph Workers["API Workers"]
+        direction TB
+        subgraph Worker1["API Worker 1"]
+            direction TB
+            server1[server<br/>0.475 CPU, 171MB]
+            style server1 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#ef6c00
+        end
+        subgraph Worker2["API Worker 2"]
+            direction TB
+            server2[server<br/>0.475 CPU, 171MB]
+            style server2 fill:#fff3e0,stroke:#ef6c00,stroke-width:2px,color:#ef6c00
+        end
+    end
+    
+    subgraph Index["Shared Index (read-only)"]
+        direction TB
+        index["/index/"]
+        style index fill:#f1f8e9,stroke:#33691e,stroke-width:2px,color:#33691e
+        subgraph Partitions["Partitions"]
+            direction TB
+            p0[index_p0.bin]
+            p1[index_p1.bin]
+            p2[index_p2.bin]
+            p3[index_p3.bin]
+            p4[index_p4.bin]
+            p5[index_p5.bin]
+            p6[index_p6.bin]
+            p7[index_p7.bin]
+            p8[index_p8.bin]
+            p9[index_p9.bin]
+            p10[index_p10.bin]
+            p11[index_p11.bin]
+            style p0 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p1 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p2 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p3 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p4 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p5 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p6 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p7 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p8 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p9 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p10 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+            style p11 fill:#f9f9f9,stroke:#333,stroke-width:1px,color:#333
+        end
+    end
+    
+    lb -->|SCM_RIGHTS| server1
+    lb -->|SCM_RIGHTS| server2
+    server1 -->|reads| index
+    server2 -->|reads| index
+```
+
+## Desenvolvimento
+### Executando testes
+```bash
+# Execute todos os testes com detector de corrida
+go test -race ./...
+
+# Execute testes para pacote específico
+go test -race ./internal/fraud
+go test -race ./internal/index
+```
+
+### Executando benchmarks
+```bash
+# Execute benchmarks
+go test -bench=. ./...
+
+# Execute benchmarks com perfil de alocação de memória
+go test -bench=. -benchmem ./...
+```
+
+### Ambiente de desenvolvimento
+```bash
+# Inicie o ambiente de desenvolvimento (LB + 2 workers de API)
+make dev-up
+
+# Pare o ambiente de desenvolvimento
+make down
+```
+
+## Licença
+Este projeto está licenciado sob os termos da licença MIT. Veja o arquivo [LICENSE](./LICENSE) para mais detalhes.</script>
+
+<div class="wrap">
+
+  <nav class="nav">
+    <a href="https://rlevidev.github.io">← rlevidev.github.io</a>
+    <div class="nav-right">
+      <div class="lang-switch" id="lang-switch">
+        <button class="lang-btn active" data-lang="en">EN</button>
+        <span class="lang-sep">/</span>
+        <button class="lang-btn" data-lang="pt">PT</button>
+      </div>
+      <a href="https://github.com/rlevidev/rinha-2026" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </nav>
+
+  <header class="page-hero">
+    <div class="badge"><span class="dot"></span> <span data-i18n="status"></span></div>
+    <h1 class="page-title">Rinha de Backend 2026</h1>
+    <p class="page-sub" data-i18n="subtitle"></p>
+    <p class="page-desc" data-i18n="desc"></p>
+    <div class="shields">
+      <img src="https://img.shields.io/badge/Go-1.26-00ADD8?logo=go" alt="Go 1.26">
+      <img src="https://img.shields.io/badge/GOEXPERIMENT-simd-blueviolet" alt="GOEXPERIMENT simd">
+      <img src="https://img.shields.io/badge/Rinha%202026-30%C2%BA%20lugar-gold" alt="30º lugar">
+      <img src="https://img.shields.io/badge/Score-5.819%2C38-brightgreen" alt="Score 5819.38">
+    </div>
+  </header>
+
+  <main class="content">
+    <div id="readme"></div>
+  </main>
+
+  <footer>
+    <span>© 2026 Raí Levi</span>
+    <a href="mailto:rlevi.dev@gmail.com">rlevi.dev@gmail.com</a>
+  </footer>
+
+</div>
+
+<!-- UMD builds: no ESM import, no CORS restriction, works from file:// -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js"></script>
+
+<script>
+/* ── i18n ─────────────────────────────────────────────────────────────────── */
+var I18N = {
+  en: {
+    htmlLang:    'en',
+    status:      'completed',
+    subtitle:    'Go · Fraud Detection · Vector Similarity Search',
+    desc:        'Fraud detection service with SIMD-optimized IVF k-NN vector search. 30th place at Rinha de Backend 2026 — score 5,819.38.',
+    lbHint:      'scroll to zoom · drag to move',
+    mermaidHint: '⊜ expand',
+    readmeId:    'readme-en',
+  },
+  pt: {
+    htmlLang:    'pt-BR',
+    status:      'concluído',
+    subtitle:    'Go · Detecção de Fraude · Busca Vetorial',
+    desc:        'Serviço de detecção de fraude com busca vetorial IVF k-NN otimizado com SIMD. 30º lugar na Rinha de Backend 2026 — score 5.819,38.',
+    lbHint:      'scroll para zoom · arraste para mover',
+    mermaidHint: '⊜ ampliar',
+    readmeId:    'readme-pt',
+  }
+};
+
+var currentLang = 'en';
+
+/* try to restore saved preference */
+try { var saved = localStorage.getItem('lang'); if (saved in I18N) currentLang = saved; } catch(e) {}
+
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'base',
+  themeVariables: {
+    background:          '#12151c',
+    primaryColor:        '#1e2a28',
+    primaryTextColor:    '#e8eaf0',
+    primaryBorderColor:  '#5eead4',
+    lineColor:           '#5eead4',
+    secondaryColor:      '#171b24',
+    tertiaryColor:       '#12151c',
+    edgeLabelBackground: '#12151c',
+    clusterBkg:          '#171b24',
+    clusterBorder:       '#2c313d',
+    titleColor:          '#e8eaf0',
+    nodeTextColor:       '#e8eaf0',
+    fontFamily:          "'IBM Plex Mono', ui-monospace, monospace",
+    fontSize:            '13px',
+  }
+});
+
+/* ── render README for a given lang ─────────────────────────────────────────── */
+var mermaidCounter = 0;
+
+async function renderReadme(lang) {
+  var t      = I18N[lang];
+  var src    = document.getElementById(t.readmeId).textContent;
+  var readme = document.getElementById('readme');
+
+  readme.innerHTML = marked.parse(src);
+
+  var blocks = readme.querySelectorAll('pre > code.language-mermaid');
+  for (var i = 0; i < blocks.length; i++) {
+    var codeEl   = blocks[i];
+    var preEl    = codeEl.parentElement;
+    var graphDef = codeEl.textContent.trim();
+    try {
+      var id = 'mermaid-' + lang + '-' + (mermaidCounter++);
+      var result = await mermaid.render(id, graphDef);
+      var wrap = document.createElement('div');
+      wrap.className = 'mermaid-wrap';
+      wrap.innerHTML = result.svg;
+
+      var hint = document.createElement('span');
+      hint.className = 'mermaid-hint';
+      hint.textContent = t.mermaidHint;
+      wrap.appendChild(hint);
+
+      wrap.addEventListener('click', (function(w) {
+        return function() { openLightbox(w.querySelector('svg'), lang); };
+      })(wrap));
+
+      preEl.replaceWith(wrap);
+    } catch (e) {
+      console.warn('mermaid block', i, e);
+    }
+  }
+}
+
+/* ── apply i18n strings to the page UI ──────────────────────────────────────── */
+function applyUI(lang) {
+  var t = I18N[lang];
+  document.getElementById('html-root').setAttribute('lang', t.htmlLang);
+
+  /* data-i18n elements */
+  document.querySelectorAll('[data-i18n]').forEach(function(el) {
+    var key = el.getAttribute('data-i18n');
+    if (t[key] !== undefined) el.textContent = t[key];
+  });
+
+  /* lang switch buttons */
+  document.querySelectorAll('.lang-btn').forEach(function(btn) {
+    btn.classList.toggle('active', btn.dataset.lang === lang);
+  });
+}
+
+/* ── switch language ────────────────────────────────────────────────────────── */
+async function setLang(lang) {
+  if (!(lang in I18N)) return;
+  currentLang = lang;
+  try { localStorage.setItem('lang', lang); } catch(e) {}
+  applyUI(lang);
+  await renderReadme(lang);
+}
+
+/* ── boot ───────────────────────────────────────────────────────────────────── */
+applyUI(currentLang);
+renderReadme(currentLang);
+
+/* lang toggle buttons */
+document.getElementById('lang-switch').addEventListener('click', function(e) {
+  var btn = e.target.closest('.lang-btn');
+  if (btn && btn.dataset.lang !== currentLang) setLang(btn.dataset.lang);
+});
+
+/* ---- lightbox ---- */
+function openLightbox(sourceSvg, lang) {
+  let scale = 1, tx = 0, ty = 0;
+  let dragging = false, ox = 0, oy = 0;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'lb-overlay';
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'lb-toolbar';
+  toolbar.innerHTML =
+    '<span class="lb-hint">' + I18N[lang || currentLang].lbHint + '</span>' +
+    '<div class="lb-btns">' +
+      '<button class="lb-btn" id="lb-zin">+</button>' +
+      '<button class="lb-btn" id="lb-zout">-</button>' +
+      '<button class="lb-btn" id="lb-rst">\u21ba</button>' +
+      '<button class="lb-btn" id="lb-cls">\u2715</button>' +
+    '</div>';
+  overlay.appendChild(toolbar);
+
+  const stage = document.createElement('div');
+  stage.className = 'lb-stage';
+
+  const svgClone = sourceSvg.cloneNode(true);
+
+  // Size SVG to fill ~85% of viewport, preserving aspect ratio via viewBox
+  var vb = sourceSvg.viewBox.baseVal;
+  if (vb && vb.width > 0) {
+    var maxW = window.innerWidth  * 0.88;
+    var maxH = (window.innerHeight - 56) * 0.88; // 56 = toolbar height
+    var ratio = vb.height / vb.width;
+    var w = maxW, h = w * ratio;
+    if (h > maxH) { h = maxH; w = h / ratio; }
+    svgClone.setAttribute('width',  Math.round(w));
+    svgClone.setAttribute('height', Math.round(h));
+  } else {
+    svgClone.style.width  = '85vw';
+    svgClone.style.height = 'auto';
+  }
+  svgClone.style.display = 'block';
+
+  stage.appendChild(svgClone);
+  overlay.appendChild(stage);
+  document.body.appendChild(overlay);
+
+  function apply() {
+    stage.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + scale + ')';
+  }
+
+  overlay.addEventListener('wheel', function(e) {
+    e.preventDefault();
+    scale = Math.max(0.2, Math.min(8, scale * (e.deltaY < 0 ? 1.12 : 0.89)));
+    apply();
+  }, { passive: false });
+
+  overlay.addEventListener('mousedown', function(e) {
+    if (e.target.closest('.lb-btns')) return;
+    dragging = true; ox = e.clientX - tx; oy = e.clientY - ty;
+    overlay.style.cursor = 'grabbing';
+  });
+  window.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    tx = e.clientX - ox; ty = e.clientY - oy; apply();
+  });
+  window.addEventListener('mouseup', function() {
+    dragging = false; overlay.style.cursor = 'grab';
+  });
+
+  let lastTouches = null;
+  overlay.addEventListener('touchstart', function(e) { lastTouches = e.touches; }, { passive: true });
+  overlay.addEventListener('touchmove', function(e) {
+    if (e.touches.length === 1 && lastTouches && lastTouches.length === 1) {
+      tx += e.touches[0].clientX - lastTouches[0].clientX;
+      ty += e.touches[0].clientY - lastTouches[0].clientY;
+    }
+    if (e.touches.length === 2 && lastTouches && lastTouches.length === 2) {
+      var d0 = Math.hypot(lastTouches[0].clientX - lastTouches[1].clientX, lastTouches[0].clientY - lastTouches[1].clientY);
+      var d1 = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+      scale = Math.max(0.2, Math.min(8, scale * (d1 / d0)));
+    }
+    lastTouches = e.touches; apply(); e.preventDefault();
+  }, { passive: false });
+
+  function close() { document.body.removeChild(overlay); }
+  overlay.querySelector('#lb-zin') .addEventListener('click', function() { scale = Math.min(8, scale * 1.25); apply(); });
+  overlay.querySelector('#lb-zout').addEventListener('click', function() { scale = Math.max(0.2, scale / 1.25); apply(); });
+  overlay.querySelector('#lb-rst') .addEventListener('click', function() { scale = 1; tx = 0; ty = 0; apply(); });
+  overlay.querySelector('#lb-cls') .addEventListener('click', close);
+  overlay.addEventListener('click', function(e) { if (e.target === overlay) close(); });
+  document.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+  });
+}
+</script>
+
+<style>
+.mermaid-wrap { position: relative; cursor: zoom-in; }
+.mermaid-hint {
+  position: absolute; bottom: 10px; right: 12px;
+  font-family: var(--font-mono); font-size: 11px;
+  color: var(--text-faint); pointer-events: none;
+  opacity: 0; transition: opacity 0.2s;
+}
+.mermaid-wrap:hover .mermaid-hint { opacity: 1; }
+
+.lb-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(10,13,18,0.97);
+  display: flex; align-items: center; justify-content: center;
+  cursor: grab;
+  -webkit-user-select: none; user-select: none;
+}
+.lb-toolbar {
+  position: fixed; top: 0; left: 0; right: 0;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 20px;
+  background: rgba(18,21,28,0.9);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  z-index: 1; cursor: default;
+}
+.lb-hint { font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); }
+.lb-btns { display: flex; gap: 8px; }
+.lb-btn {
+  font-family: var(--font-mono); font-size: 15px;
+  background: var(--surface); border: 1px solid var(--border-strong);
+  color: var(--text-muted); border-radius: 6px;
+  padding: 4px 11px; cursor: pointer; line-height: 1.4;
+  transition: border-color 0.15s, color 0.15s;
+}
+.lb-btn:hover { border-color: var(--accent); color: var(--accent); }
+.lb-stage { transform-origin: center center; will-change: transform; padding: 48px 24px 24px; }
+.lb-stage svg { display: block; }
+</style>
+
+</body>
+</html>
